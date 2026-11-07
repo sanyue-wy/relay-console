@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+.venv/
+venv/
+
+# 运行时数据与登录态，绝不入库
+data/
+profiles/
+
+# 本机配置（可能含 Hark 地址等私有信息）
+config.yaml
+
+*.log
+.DS_Store
+
+# 本机工具状态，不属于工程
+.mimosa/
+.v2c/

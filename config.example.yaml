@@ -1,0 +1,32 @@
+# 复制为 config.yaml 后修改
+host: 127.0.0.1
+port: 8765
+chrome_path: "C:/Program Files/Google/Chrome/Application/chrome.exe"
+data_dir: ./data
+profiles_dir: ./profiles
+
+summary:
+  base_url: https://api.deepseek.com
+  model: deepseek-chat
+  every_n_turns: 4          # 每 4 轮滚动更新一次摘要
+  recent_rounds_raw: 3      # 交接包附带最近几轮原文
+  timeout_seconds: 25
+  near_threshold_chars: 60000   # 未摘要部分达到该字符数时提前生成摘要（0 关闭）；网页看不到额度百分比，用它近似"85% 阈值预生成"
+
+# 接力顺序：当前平台触发上限后，按此顺序找下一个可用平台
+relay_order: [deepseek, kimi, doubao, gemini, hark]
+default_cooldown_minutes: 180
+
+platforms:
+  deepseek: {port: 9301}
+  doubao:   {port: 9302}
+  kimi:     {port: 9303}
+  gemini:   {port: 9304}
+  hark:     {port: 9305, url: "https://YOUR-HARK-WEB-URL"}   # 填写 Hark 网页版地址
+
+arena:
+  agent_turn_timeout: 600       # 等 Agent 交回发言的秒数
+  allow_batch_approve: false    # 是否显示“本轮全部批准”按钮
+
+approvals:
+  ticket_ttl_seconds: 300

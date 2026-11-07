@@ -1,0 +1,59 @@
+# 各平台选择器与上限文案。网页改版时只改这里。
+# ⚠ 以下选择器是起步值，网页会变，第一次使用前请运行：
+#     python scripts/probe.py <平台>
+# 按探测结果修正。字段含义见 adapters/spec.py 的 SelectorSet。
+
+deepseek:
+  url: https://chat.deepseek.com/
+  input: "textarea"
+  send_button: null                  # null = 按 Enter 发送
+  stop_button: null
+  last_reply: ".ds-markdown"
+  new_chat: null                     # null = 直接打开首页开新对话
+  upload_input: "input[type=file]"
+  limit_texts: ["服务器繁忙", "达到上限", "请稍后再试", "Server busy", "limit"]
+  limit_status_codes: [429]
+
+doubao:
+  url: https://www.doubao.com/chat/
+  input: "textarea"
+  send_button: null
+  stop_button: null
+  last_reply: "[data-testid='receive_message']"
+  new_chat: null
+  upload_input: "input[type=file]"
+  limit_texts: ["次数已用完", "达到上限", "明天再来"]
+  limit_status_codes: [429]
+
+kimi:
+  url: https://www.kimi.com/
+  input: "[contenteditable='true']"
+  send_button: null
+  stop_button: null
+  last_reply: ".markdown"
+  new_chat: null
+  upload_input: "input[type=file]"
+  limit_texts: ["已达上限", "额度已用完", "稍后再试"]
+  limit_status_codes: [429]
+
+gemini:
+  url: https://gemini.google.com/app
+  input: "rich-textarea [contenteditable='true']"
+  send_button: "button[aria-label*='Send'], button[aria-label*='发送']"
+  stop_button: "button[aria-label*='Stop'], button[aria-label*='停止']"
+  last_reply: "message-content"
+  new_chat: null
+  upload_input: "input[type=file]"
+  limit_texts: ["You've reached your limit", "reached your limit", "已达到上限"]
+  limit_status_codes: [429]
+
+hark:
+  url: https://YOUR-HARK-WEB-URL     # 也可在 config.yaml 的 platforms.hark.url 覆盖
+  input: "textarea"
+  send_button: null
+  stop_button: null
+  last_reply: "[data-role='assistant']"
+  new_chat: null
+  upload_input: "input[type=file]"
+  limit_texts: ["limit", "上限"]
+  limit_status_codes: [429]

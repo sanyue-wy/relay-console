@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Relay Console</title>
+<style>
+  body{margin:0;font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif;display:grid;grid-template-columns:240px 1fr 340px;height:100vh;color:#222}
+  aside,main,section{overflow:auto;padding:12px;border-right:1px solid #eee}
+  h3{margin:12px 0 6px;font-size:13px;color:#666;text-transform:uppercase}
+  button{cursor:pointer;border:1px solid #ccc;background:#fafafa;border-radius:6px;padding:3px 8px;margin:2px}
+  button.primary{background:#2463eb;color:#fff;border-color:#2463eb}
+  input,select,textarea{width:100%;box-sizing:border-box;margin:3px 0;padding:5px;border:1px solid #ccc;border-radius:6px;font:inherit}
+  .item{padding:6px;border-radius:6px;cursor:pointer}.item:hover,.item.on{background:#eef3ff}
+  .msg{margin:8px 0;padding:8px 10px;border-radius:8px;white-space:pre-wrap}
+  .user{background:#eef3ff}.assistant{background:#f6f6f6}
+  .tag{font-size:11px;color:#888}
+  .relay{color:#b45309;font-size:12px;margin:6px 0}
+  .card{border:1px solid #eee;border-radius:8px;padding:8px;margin:6px 0}
+  .pending{border-color:#f59e0b;background:#fffbeb}
+  main{display:flex;flex-direction:column}#chat{flex:1;overflow:auto}
+</style>
+</head>
+<body>
+<aside>
+  <h3>平台</h3><div id="platforms"></div>
+  <h3>会话</h3>
+  <input id="newTitle" placeholder="新会话标题">
+  <select id="newPlatform"></select>
+  <button class="primary" onclick="newSession()">新建</button>
+  <div id="sessions"></div>
+</aside>
+
+<main>
+  <div id="head" class="tag">选择或新建一个会话</div>
+  <div id="chat"></div>
+  <textarea id="q" rows="3" placeholder="输入问题，Ctrl+Enter 发送"></textarea>
+  <div>
+    <button class="primary" onclick="ask()">发送</button>
+    <button onclick="publish('summary')">摘要发布到对抗池</button>
+    <button onclick="publish('messages')">最近 6 条发布到对抗池</button>
+    <button onclick="publishText()">编辑后发布</button>
+  </div>
+</main>
+
+<section>
+  <h3>授权请求</h3><div id="approvals"><span class="tag">暂无</span></div>
+  <h3>对抗池条目</h3><div id="items"></div>
+  <h3>Agent</h3>
+  <input id="agentName" placeholder="Agent 名称"><button onclick="newAgent()">新建 Agent 令牌</button>
+  <div id="agents"></div>
+  <h3>对抗</h3>
+  <select id="mode"><option value="web_vs_web">网页 vs 网页</option><option value="web_vs_agent">网页 vs Agent</option><option value="agent_vs_agent">Agent vs Agent</option></select>
+  <input id="topic" placeholder="议题">
+  <input id="seatA" placeholder="A 方：deepseek 或 agent:名称">
+  <input id="seatB" placeholder="B 方：kimi 或 agent:名称">
+  <button onclick="newArena()">创建对局</button>
+  <div id="arenas"></div>
+  <h3>审计</h3><button onclick="showAudit()">查看最近记录</button><pre id="audit" style="white-space:pre-wrap;font-size:11px"></pre>
+</section>
+
+<script>
+let cur=null, platforms=[];
+const api=(p,o={})=>fetch(p,{headers:{'Content-Type':'application/json'},...o}).then(async r=>{const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.detail||j.error||r.status);return j});
+const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+async function loadPlatforms(){
+  const d=await api('/api/platforms'); platforms=d.platforms.map(p=>p.id);
+  document.getElementById('platforms').innerHTML=d.platforms.map(p=>`<div>${p.id} ${p.cooldown_until?'<span class=tag>冷却至 '+p.cooldown_until.slice(11,16)+'</span>':''} <button onclick="openP('${p.id}')">打开/登录</button></div>`).join('');
+  document.getElementById('newPlatform').innerHTML=platforms.map(p=>`<option>${p}</option>`).join('');
+}
+async function openP(id){await api(`/api/platforms/${id}/open`,{method:'POST'})}
+async function loadSessions(){
+  const s=await api('/api/sessions');
+  document.getElementById('sessions').innerHTML=s.map(x=>`<div class="item ${x.id===cur?'on':''}" onclick="openS('${x.id}')">${esc(x.title)}<div class=tag>${x.chain.join(' → ')}</div></div>`).join('');
+}
+async function newSession(){
+  const r=await api('/api/sessions',{method:'POST',body:JSON.stringify({title:newTitle.value||'新会话',platform:newPlatform.value})});
+  cur=r.id; await loadSessions(); openS(cur);
+}
+async function openS(id){
+  cur=id; const s=await api('/api/sessions/'+id);
+  head.textContent=`${s.title} · 当前 ${s.platform} · 接力链 ${s.chain.join(' → ')}`;
+  chat.innerHTML=s.messages.map(m=>`<div class="msg ${m.role}"><div class=tag>${m.role==='user'?'你':m.platform}</div>${esc(m.content)}</div>`).join('');
+  chat.scrollTop=chat.scrollHeight; loadSessions();
+}
+async function ask(){
+  if(!cur)return alert('先选会话'); const t=q.value.trim(); if(!t)return; q.value='';
+  chat.innerHTML+=`<div class="msg user">${esc(t)}</div><div class=tag id=wait>等待回复…</div>`;
+  try{const r=await api(`/api/sessions/${cur}/ask`,{method:'POST',body:JSON.stringify({text:t})});
+    r.relays.forEach(x=>chat.innerHTML+=`<div class=relay>已接力：${x.from} → ${x.to}（${esc(x.reason)}）</div>`);
+  }catch(e){alert(e.message)} openS(cur); loadPlatforms();
+}
+q.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.ctrlKey)ask()});
+async function publish(mode){
+  if(!cur)return; const title=prompt('给 Agent 看的标题'); if(!title)return;
+  await api('/api/pool/publish',{method:'POST',body:JSON.stringify({title,session_id:cur,mode})}); loadItems();
+}
+async function publishText(){
+  const title=prompt('标题'); if(!title)return; const text=prompt('内容（可脱敏后粘贴）'); if(!text)return;
+  await api('/api/pool/publish',{method:'POST',body:JSON.stringify({title,mode:'text',text})}); loadItems();
+}
+async function loadItems(){
+  const it=await api('/api/pool/items');
+  items.innerHTML=it.map(i=>`<div class=card>${esc(i.title)} <span class=tag>${i.id} · ${i.audience}</span><button onclick="delItem('${i.id}')">删除</button></div>`).join('')||'<span class=tag>空</span>';
+}
+async function delItem(id){await api('/api/pool/items/'+id,{method:'DELETE'});loadItems()}
+async function loadApprovals(){
+  const d=await api('/api/approvals');
+  approvals.innerHTML=d.pending.map(r=>`<div class="card pending"><b>${esc(r.participant_id)}</b> 申请读取 ${r.scope_type==='items'?'条目：'+esc((r.titles||[]).join('、')):'对局 '+r.scope.arena_id+' 的本轮题目'}<div>理由：${esc(r.reason)}</div><button class=primary onclick="decide('${r.id}','approve')">批准一次</button>${d.allow_batch&&r.scope_type==='turn'?`<button onclick="approveRound('${r.scope.arena_id}')">本轮全部批准</button>`:''}<button onclick="decide('${r.id}','deny')">拒绝</button></div>`).join('')||'<span class=tag>暂无</span>';
+}
+async function approveRound(aid){try{await api(`/api/arenas/${aid}/approve-round`,{method:'POST'})}catch(e){alert(e.message)}loadApprovals()}
+async function decide(id,d){await api(`/api/approvals/${id}/${d}`,{method:'POST'});loadApprovals()}
+async function loadAgents(){
+  const a=await api('/api/agents');
+  agents.innerHTML=a.map(x=>`<div class=tag>${x.participant_id} ${x.revoked?'(已吊销)':`<button onclick="revoke('${x.participant_id}')">吊销</button>`}</div>`).join('');
+}
+async function newAgent(){
+  const r=await api('/api/agents',{method:'POST',body:JSON.stringify({name:agentName.value})});
+  prompt('令牌只显示一次，复制到该 Agent 的 MCP 配置 RELAY_AGENT_TOKEN：',r.token); loadAgents();
+}
+async function revoke(pid){await api(`/api/agents/${encodeURIComponent(pid)}/revoke`,{method:'POST'});loadAgents()}
+function seat(v,side){v=v.trim();return v.startsWith('agent:')?{side,kind:'agent',participant_id:v}:{side,kind:'web',platform:v}}
+async function newArena(){
+  await api('/api/arenas',{method:'POST',body:JSON.stringify({mode:mode.value,topic:topic.value,seats:[seat(seatA.value,'正方'),seat(seatB.value,'反方')]})}); loadArenas();
+}
+async function loadArenas(){
+  const a=await api('/api/arenas');
+  arenas.innerHTML=a.map(x=>`<div class=card>${esc(x.topic)} <span class=tag>${x.mode}</span><button onclick="round('${x.id}')">下一轮</button><button onclick="viewArena('${x.id}')">查看</button><div id="ar_${x.id}"></div></div>`).join('');
+}
+async function round(id){try{await api(`/api/arenas/${id}/round`,{method:'POST'})}catch(e){alert(e.message)} viewArena(id)}
+async function viewArena(id){
+  const d=await api('/api/arenas/'+id);
+  document.getElementById('ar_'+id).innerHTML=`<div class=tag>状态：${esc(d.round_status)}</div>`+d.turns.map(t=>`<div class="msg assistant"><div class=tag>第${t.round}轮 · ${t.side}</div>${esc(t.content)}</div>`).join('');
+}
+async function showAudit(){const a=await api('/api/audit');audit.textContent=a.map(x=>`${new Date(x.ts*1000).toLocaleString()} ${x.actor} ${x.action} ${x.detail}`).join('\n')}
+
+loadPlatforms();loadSessions();loadItems();loadAgents();loadArenas();loadApprovals();
+setInterval(loadApprovals,3000);
+</script>
+</body>
+</html>
