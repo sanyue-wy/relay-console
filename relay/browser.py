@@ -21,6 +21,7 @@ from adapters.spec import AdapterError, ChromeNotFound, PortNotReady, ProfileInU
 
 from .config import platform_accounts
 from .fingerprint import FingerprintError, build_backend, resolve_profile_id
+from .storage import PoolError
 
 
 def _port_open(port: int) -> bool:
@@ -69,7 +70,10 @@ class ChromeManager:
         """
         base = int(self.cfg["platforms"][pid]["port"])
         accounts = platform_accounts(self.cfg, pid)
-        idx = accounts.index(account) if account in accounts else 0
+        account = account or "main"
+        if account not in accounts:
+            raise PoolError("NOT_FOUND", f"{pid} 没有登记账号 {account}；请先在账户页登记")
+        idx = accounts.index(account)
         if idx >= 10:
             raise RuntimeError(f"{pid} 最多支持 10 个账号（端口段 base+0..base+90）")
         return base + 10 * idx

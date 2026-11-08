@@ -38,3 +38,13 @@ def test_t5_default_ports_ok(tmp_path):
         "kimi": {"port": 9303, "accounts": ["main"]},
     })
     ChromeManager(cfg)      # 不抛异常
+
+
+# ---------------- T6：未登记账号不再静默回落到 main
+def test_t6_unregistered_account_raises(tmp_path):
+    mgr = ChromeManager(_chrome_cfg(tmp_path, {
+        "deepseek": {"port": 9301, "accounts": ["main"]},
+    }))
+    with pytest.raises(PoolError, match="NOT_FOUND"):
+        mgr._port("deepseek", "ghost")
+    assert mgr._port("deepseek", "main") == 9301
