@@ -13,8 +13,9 @@ POLL = 0.5
 
 
 class GenericWebAdapter(WebAdapter):
-    def __init__(self, info: AdapterInfo, selectors: SelectorSet, page_provider):
-        super().__init__(info, selectors, page_provider)
+    def __init__(self, info: AdapterInfo, selectors: SelectorSet, page_provider,
+                 account: str | None = None):
+        super().__init__(info, selectors, page_provider, account=account)
         self.page = None
         self.current_chat: str | None = None
         self._baseline = 0

@@ -18,7 +18,8 @@ relay-console/
     summarizer.py           滚动摘要 + 交接包
     arena.py                对抗模式
     storage.py              主池 main.db / 对抗池 arena.db / 授权 / 审计
-    browser.py              真实 Chrome + CDP
+    browser.py              浏览器承载：自建 Chrome 或指纹浏览器（CDP）
+    fingerprint.py          指纹浏览器本地 API（AdsPower / ovoBrowser）
     crypto.py               密钥（系统凭据库）
     static/index.html       控制台界面
   adapters/
@@ -33,6 +34,7 @@ relay-console/
   scripts/
     setup_keys.py           保存摘要 API key
     probe.py                探测/修正平台选择器
+    fingerprint_profiles.py 列出指纹浏览器环境 ID（填 config 用）
   tests/                    离线自测（无需浏览器）
 ```
 
@@ -43,9 +45,9 @@ python -m venv .venv
 pip install -r requirements.txt
 copy config.example.yaml config.yaml      # 改 chrome_path、Hark 地址、接力顺序、多账号
 python scripts/setup_keys.py              # 输入摘要 API key，存入 Windows 凭据管理器
-python -m pytest -q                       # 15 项自测应全部通过
+python -m pytest -q                       # 29 项自测应全部通过
 ```
-不需要 `playwright install`，程序连接你本机安装的 Chrome。
+不需要 `playwright install`，程序连接你本机安装的 Chrome（或指纹浏览器提供的 CDP）。
 
 ## 首次使用
 1. 逐个平台运行 `python scripts/probe.py deepseek`（kimi / doubao / gemini / hark 同理，多账号加 `--account 账号名`）。
@@ -92,6 +94,35 @@ python -m pytest -q                       # 15 项自测应全部通过
 - `platforms.<pid>.accounts: [main, backup]` 为一个平台配多个账号，每个账号独立 Chrome profile、独立冷却；接力优先在同平台换账号，再换平台。
 - 想省掉手动登录：`python scripts/add_credential.py deepseek main` 把该账号的登录凭据存进 Windows 凭据管理器，并给平台开 `autofill: true`。打开平台若未登录会自动代填。
 - 凭据只在控制台进程里读出并注入登录表单：不落盘、不进日志、MCP/Agent 永远接触不到；不开 autofill 就完全不用。
+
+## 指纹隔离（可选，P3-7）
+默认 `fingerprint.backend: chrome`，每个账号只是独立 Chrome profile（数据隔离，环境指纹仍趋同）。
+如果本机装了指纹浏览器，可以让每个“平台+账号”跑在它自己的**环境**里，环境级指纹由它负责：
+
+- 支持 **AdsPower** 与 **ovoBrowser**（两者本地 API 默认都在 `127.0.0.1:50325`，路径也兼容）。
+- 本工程不自己实现 Canvas/WebGL/字体等伪装——那层交给指纹浏览器；这里只做“打开环境 → 拿 CDP 端点 → Playwright 接管”。
+- 接力换账号时，换的是另一个指纹环境；`close()` 只断开 CDP，不关你的浏览器。
+
+配置步骤：
+1. 启动客户端并在设置里开启**本地 API**（AdsPower 还需在 设置 → API 生成 api-key；可填 `fingerprint.api_key`，或用环境变量 `ADSPOWER_API_KEY`）。
+2. 在客户端里为每个平台账号建一个环境，**在该环境内手动登录一次**。
+3. 列出环境 ID：
+   ```powershell
+   python scripts/fingerprint_profiles.py --backend ovobrowser
+   # AdsPower: python scripts/fingerprint_profiles.py --backend adspower
+   ```
+4. 写进 `config.yaml`：
+   ```yaml
+   fingerprint:
+     backend: ovobrowser          # 或 adspower
+     profiles:
+       deepseek: {main: "<环境ID>", alt: "<环境ID>"}
+       kimi:     {main: "<环境ID>"}
+   ```
+   每个启用的平台账号都必须有环境 ID；缺失会直接报错并指出要补的键，不会静默退回 Chrome。
+
+实测（ovoBrowser 0.5.4 + 临时环境）：CDP 接管后 `navigator.webdriver === false`，UA/时区/语言/核心数均来自环境。
+注意：指纹伪装由客户端负责，CDP 接管本身仍是可检测信号；两个客户端默认都占 50325，不能同时开启。
 
 ## 安全要点
 - 不保存任何平台密码；只用你手动登录后留下的 Chrome profile。**例外**：仅当你在 `add_credential` 里主动存入并开启 `autofill` 时，控制台会用凭据库代填登录表单；凭据仍不出本机凭据库、不进任何日志或 MCP 通道。

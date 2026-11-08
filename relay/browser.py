@@ -1,7 +1,11 @@
-"""浏览器层：每个平台每个账号一个真实 Chrome + 独立 profile，Playwright 通过 CDP 连接。
+"""浏览器层：每个平台每个账号一个独立浏览器环境，Playwright 通过 CDP 接管页面。
 
-首次打开时你在窗口里手动登录（或开启 autofill 后用凭据库代填），登录态保存在
-profiles/<平台>/<账号>，程序不接触、不记录密码。
+两种承载方式（config.yaml 的 fingerprint.backend）：
+  - chrome（默认）：本工程自己拉起真实 Chrome，登录态存在 profiles/<平台>/<账号>；
+  - adspower / ovobrowser：交给本机已装的指纹浏览器，环境级指纹由它负责，本工程只通过
+    它的本地 API 打开环境、再用 CDP 连接（见 relay/fingerprint.py）。
+
+首次打开时你在窗口里手动登录（或开启 autofill 后用凭据库代填），程序不接触、不记录密码。
 """
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ from urllib.parse import urlparse
 from playwright.async_api import Browser, Page, Playwright, async_playwright
 
 from .config import platform_accounts
+from .fingerprint import build_backend, resolve_profile_id
 
 
 def _port_open(port: int) -> bool:
@@ -29,6 +34,11 @@ class ChromeManager:
         self._browsers: dict[tuple[str, str], Browser] = {}
         self._procs: dict[tuple[str, str], subprocess.Popen] = {}
         self._lock = asyncio.Lock()
+        fp_cfg = cfg.get("fingerprint") or {}
+        self.fp_cfg = dict(fp_cfg)
+        self.backend_name = str(fp_cfg.get("backend") or "chrome").strip().lower()
+        self.backend = None if self.backend_name == "chrome" else build_backend(fp_cfg)
+        self.profile_map = dict(fp_cfg.get("profiles") or {})
 
     def _port(self, pid: str, account: str | None = None) -> int:
         base = int(self.cfg["platforms"][pid]["port"])
@@ -50,37 +60,54 @@ class ChromeManager:
             url,
         ])
 
+    async def _chrome_endpoint(self, pid: str, url: str, account: str) -> str:
+        self.launch(pid, url, account)
+        port = self._port(pid, account)
+        for _ in range(60):
+            if _port_open(port):
+                return f"http://127.0.0.1:{port}"
+            await asyncio.sleep(0.5)
+        raise RuntimeError(f"{pid}:{account} 的 Chrome 调试端口 {port} 未就绪")
+
+    async def _pick_page(self, br: Browser, url: str) -> Page:
+        ctx = br.contexts[0] if br.contexts else await br.new_context()
+        host = urlparse(url).netloc
+        for p in ctx.pages:
+            if urlparse(p.url).netloc == host:
+                return p
+        p = (ctx.pages[0] if ctx.pages and ctx.pages[0].url in ("about:blank", "chrome://newtab/")
+             else await ctx.new_page())
+        await p.goto(url)
+        return p
+
     async def page(self, pid: str, url: str, account: str | None = None) -> Page:
         account = account or "main"
         async with self._lock:
             if self._pw is None:
                 self._pw = await async_playwright().start()
-            self.launch(pid, url, account)
-            port = self._port(pid, account)
-            for _ in range(60):
-                if _port_open(port):
-                    break
-                await asyncio.sleep(0.5)
+            if self.backend is None:
+                endpoint = await self._chrome_endpoint(pid, url, account)
             else:
-                raise RuntimeError(f"{pid}:{account} 的 Chrome 调试端口 {port} 未就绪")
+                profile_id = resolve_profile_id(self.profile_map, pid, account)
+                endpoint = await self.backend.start(profile_id)
             br = self._browsers.get((pid, account))
             if br is None or not br.is_connected():
-                br = await self._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+                br = await self._pw.chromium.connect_over_cdp(endpoint)
                 self._browsers[(pid, account)] = br
-            ctx = br.contexts[0] if br.contexts else await br.new_context()
-            host = urlparse(url).netloc
-            for p in ctx.pages:
-                if urlparse(p.url).netloc == host:
-                    return p
-            p = ctx.pages[0] if ctx.pages and ctx.pages[0].url in ("about:blank", "chrome://newtab/") else await ctx.new_page()
-            await p.goto(url)
-            return p
+            return await self._pick_page(br, url)
 
     async def close(self) -> None:
         for br in self._browsers.values():
             try:
-                await br.close()   # 只断开 CDP，不关闭用户的 Chrome
+                await br.close()   # 只断开 CDP，不关闭用户的浏览器
+            except Exception:
+                pass
+        self._browsers.clear()
+        if self.backend is not None:
+            try:
+                await self.backend.aclose()
             except Exception:
                 pass
         if self._pw:
             await self._pw.stop()
+            self._pw = None

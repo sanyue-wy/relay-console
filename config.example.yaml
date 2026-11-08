@@ -27,6 +27,17 @@ platforms:
   gemini:   {port: 9304, accounts: [main]}
   hark:     {port: 9305, url: "https://YOUR-HARK-WEB-URL", accounts: [main]}   # 填写 Hark 网页版地址
 
+# 指纹隔离（P3-7）：把每个平台账号放进本机指纹浏览器的一个“环境”，环境级指纹由它负责。
+# backend: chrome 时保持原方式（自己拉起 Chrome + profiles/ 目录，指纹不隔离）。
+fingerprint:
+  backend: chrome            # chrome | adspower | ovobrowser
+  api_base: ""               # 留空用默认：AdsPower / ovoBrowser 均为 http://127.0.0.1:50325（以客户端设置为准）
+  api_key: ""                # AdsPower 设置 → API 里生成；留空时读环境变量 ADSPOWER_API_KEY
+  startup_timeout_seconds: 90
+  profiles:                  # 平台 → 账号 → 指纹浏览器的“环境 ID”
+    # deepseek: {main: "<环境ID>", alt: "<环境ID>"}
+    # kimi:     {main: "<环境ID>"}
+
 arena:
   agent_turn_timeout: 600       # 等 Agent 交回发言的秒数
   allow_batch_approve: false    # 是否显示“本轮全部批准”按钮

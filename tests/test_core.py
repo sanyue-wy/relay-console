@@ -197,6 +197,15 @@ def test_session_scope_approval(pools):
         arena.fetch(pid, rid)
 
 
+# ---------------- 适配器账号透传（多账号）
+def test_web_adapter_passes_account():
+    import adapters  # noqa: F401  导入即注册平台
+    from adapters.platforms import DeepSeekAdapter
+    ad = DeepSeekAdapter(page_provider=lambda *a: None, account="alt")
+    assert ad.account == "alt"
+    assert DeepSeekAdapter(page_provider=lambda *a: None).account == "main"
+
+
 def test_platform_credential_roundtrip(monkeypatch):
     import relay.crypto as crypto
     store = {}

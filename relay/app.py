@@ -50,7 +50,12 @@ async def lifespan(app: FastAPI):
     S.browser = ChromeManager(CFG)
     S.engine = RelayEngine(CFG, S.main, S.browser, Summarizer(CFG, S.main, get_api_key()))
     S.runner = ArenaRunner(CFG, S.main, S.arena, S.engine)
-    print(f"\n  控制台地址: http://{CFG['host']}:{CFG['port']}/?token={CONSOLE_TOKEN}\n")
+    if S.browser.backend is None:
+        browser_desc = "自建 Chrome + 独立 profile（指纹不隔离）"
+    else:
+        browser_desc = f"指纹浏览器 {S.browser.backend_name}（每个平台账号一个环境）"
+    print(f"\n  浏览器承载: {browser_desc}", flush=True)
+    print(f"  控制台地址: http://{CFG['host']}:{CFG['port']}/?token={CONSOLE_TOKEN}\n", flush=True)
     yield
     await S.browser.close()
 
