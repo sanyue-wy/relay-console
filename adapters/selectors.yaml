@@ -56,11 +56,11 @@ gemini:
   limit_status_codes: [429]
 
 hark:
-  url: https://YOUR-HARK-WEB-URL     # 也可在 config.yaml 的 platforms.hark.url 覆盖
-  input: "textarea"
-  send_button: null
+  url: https://hark.com               # 也可在 config.yaml 的 platforms.hark.url 覆盖
+  input: "[data-testid='chat-input']"
+  send_button: "[data-testid='send-button'][aria-label='Send message']"
   stop_button: null
-  last_reply: "[data-role='assistant']"
+  last_reply: "[data-testid='message-text'][class*='_151xtfx5']"   # 助手气泡；用户气泡是 _151xtfx4
   new_chat: null
   upload_input: "input[type=file]"
   chat_list_item: null

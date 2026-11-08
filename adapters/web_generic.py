@@ -19,6 +19,8 @@ class GenericWebAdapter(WebAdapter):
         self.page = None
         self.current_chat: str | None = None
         self._baseline = 0
+        self._baseline_text = ""
+        self._last_sent = ""
         self._net_hits: list[tuple[float, int]] = []
         self.lock = asyncio.Lock()          # 同一平台页面同一时刻只服务一个会话
 
@@ -96,6 +98,12 @@ class GenericWebAdapter(WebAdapter):
         except Exception:
             return False
 
+    def _is_started(self, count: int, text: str) -> bool:
+        """新回复是否出现：条数增加，或最后一条助手文本变化（虚拟列表会回收旧消息，条数不变）。"""
+        if count > self._baseline:
+            return True
+        return bool(text) and text != self._baseline_text and text != self._last_sent
+
     async def send(self, turn: Turn) -> None:
         await self.start()
         await self._wait_input()
@@ -103,6 +111,8 @@ class GenericWebAdapter(WebAdapter):
         if st:
             raise LimitReached(st)
         self._baseline = await self._reply_count()
+        self._baseline_text = await self._extract_last_reply()
+        self._last_sent = turn.content
         box = self.page.locator(self.sel.input).first
         await box.click()
         try:
@@ -128,7 +138,7 @@ class GenericWebAdapter(WebAdapter):
             if st:
                 raise LimitReached(st)
             if not started:
-                started = await self._reply_count() > self._baseline
+                started = self._is_started(await self._reply_count(), await self._extract_last_reply())
                 await asyncio.sleep(POLL)
                 continue
             text = await self._extract_last_reply()
