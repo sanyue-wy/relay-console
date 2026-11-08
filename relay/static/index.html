@@ -114,6 +114,8 @@
   .acc-actions{margin-top:8px}
   .setrow{display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin:7px 0}
   .setrow label{font-size:13px;color:var(--dim)}
+  .ferr{font-size:12px;color:#f9a8d4;margin:-3px 0 0;grid-column:2;display:none}
+  .ferr:not(:empty){display:block}
 </style>
 </head>
 <body>
@@ -233,6 +235,33 @@
         <h3>🧠 摘要</h3>
         <div class="setrow"><label>每 N 轮更新</label><input id="setTurns" type="number" min="1"></div>
         <div class="setrow"><label>交接附带轮数</label><input id="setRecent" type="number" min="0"></div>
+      </div>
+      <div class="card" id="card-sumapi">
+        <h3>🧠 摘要模型（第三方 API）</h3>
+        <div class="hint">摘要只调用这里配置的 API，不占用网页版额度；对话内容会发送给该提供者。</div>
+        <div class="setrow"><label>提供者</label>
+          <select id="sumProvider" data-act="sumPreset">
+            <option value="deepseek">DeepSeek</option>
+            <option value="moonshot">Moonshot（Kimi 开放平台）</option>
+            <option value="dashscope">阿里云百炼（通义千问）</option>
+            <option value="openai">OpenAI</option>
+            <option value="custom">自定义（OpenAI 兼容，如 Ollama）</option>
+          </select></div>
+        <div class="setrow"><label>base_url</label><input id="sumBaseUrl" placeholder="https://api.deepseek.com（本机可用 http://127.0.0.1:11434/v1）"></div>
+        <div class="ferr" id="ferr_base_url"></div>
+        <div class="setrow"><label>模型</label><input id="sumModel" placeholder="deepseek-chat"></div>
+        <div class="ferr" id="ferr_model"></div>
+        <div class="setrow"><label>超时(秒)</label><input id="sumTimeout" type="number" min="3" max="600"></div>
+        <div class="ferr" id="ferr_timeout_seconds"></div>
+        <div class="setrow"><label>API 密钥</label><input id="sumKey" type="password" placeholder="只写不读；留空表示不修改" autocomplete="new-password"></div>
+        <div class="ferr" id="ferr_api_key"></div>
+        <div class="sub" id="sumKeyState"></div>
+        <div class="sub" id="sumTestResult"></div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn small" data-act="sumSave">保存</button>
+          <button class="ghost small" data-act="sumTest">测试连接</button>
+          <button class="ghost small danger" data-act="sumClearKey">清除密钥</button>
+        </div>
       </div>
     </div>
     <div>

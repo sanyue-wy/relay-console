@@ -25,10 +25,11 @@ from adapters.spec import AdapterError
 from .arena import ArenaRunner
 from .browser import ChromeManager
 from .config import APP_VERSION, data_home, load_config, platform_accounts, save_config
-from .crypto import CRED_ARENA, CRED_MAIN, get_api_key, get_fernet, get_platform_credential
+from .crypto import (CRED_ARENA, CRED_MAIN, delete_api_key, get_api_key, get_fernet,
+                     get_platform_credential, set_api_key)
 from .relay_engine import RelayEngine
 from .storage import ArenaPool, MainPool, PoolError
-from .summarizer import Summarizer
+from .summarizer import PROVIDER_PRESETS, Summarizer, validate_base_url
 
 CFG = load_config()
 log = logging.getLogger("relay.app")
@@ -535,6 +536,106 @@ def update_accounts(pid: str, b: AccountsUpdate):
         CFG["platforms"].setdefault(pid, {})["autofill"] = bool(b.autofill)
     save_config(CFG)
     return get_accounts(pid)
+
+
+# ---------------------------------------------------------------- 控制台：摘要模型设置（A1）
+def _validation_detail(errors: list[dict]) -> dict:
+    """字段级校验错误的响应体：前端显示在对应输入框旁边。"""
+    return {"error": "VALIDATION", "errors": errors}
+
+
+class SummarySettingsUpdate(BaseModel):
+    provider: str = "deepseek"
+    base_url: str = ""
+    model: str = ""
+    timeout_seconds: float = 25
+    api_key: str | None = None            # 只写不读：非空时写入系统凭据库
+    clear_key: bool = False               # 为真时删除凭据库里的密钥
+
+
+def _summary_settings_payload() -> dict:
+    s = CFG["summary"]
+    provider = str(s.get("provider") or "custom")
+    return {"provider": provider,
+            "base_url": s.get("base_url", ""),
+            "model": s.get("model", ""),
+            "timeout_seconds": s.get("timeout_seconds", 25),
+            "has_key": bool(get_api_key()),
+            "presets": PROVIDER_PRESETS}   # 预设只用于前端填默认值
+
+
+@app.get("/api/settings/summary", dependencies=C)
+def get_summary_settings():
+    """摘要模型设置。永远不返回密钥本身，只有 has_key 布尔值。"""
+    return _summary_settings_payload()
+
+
+@app.post("/api/settings/summary", dependencies=C)
+async def update_summary_settings(b: SummarySettingsUpdate):
+    """保存摘要模型配置并热更新客户端，无需重启。密钥只进系统凭据库。"""
+    errors = []
+    provider = (b.provider or "").strip()
+    if provider not in PROVIDER_PRESETS:
+        errors.append({"field": "provider", "message": f"不支持的提供者，可选：{'、'.join(PROVIDER_PRESETS)}"})
+    preset = PROVIDER_PRESETS.get(provider, {"base_url": "", "model": ""})
+    base_url = (b.base_url or "").strip() or preset["base_url"]
+    model = (b.model or "").strip() or preset["model"]
+    if provider == "custom" and not base_url:
+        errors.append({"field": "base_url", "message": "自定义提供者必须填写 base_url"})
+    if not model:
+        errors.append({"field": "model", "message": "请填写模型名"})
+    if not base_url:
+        errors.append({"field": "base_url", "message": "请填写 base_url"})
+    else:
+        err = validate_base_url(base_url)
+        if err:
+            errors.append({"field": "base_url", "message": err})
+    if not (3 <= float(b.timeout_seconds) <= 600):
+        errors.append({"field": "timeout_seconds", "message": "超时时间需在 3–600 秒之间"})
+    if errors:
+        raise HTTPException(400, _validation_detail(errors))
+    if b.clear_key:
+        delete_api_key()
+    if b.api_key and b.api_key.strip():
+        set_api_key(b.api_key.strip())
+    CFG["summary"]["provider"] = provider
+    CFG["summary"]["base_url"] = base_url
+    CFG["summary"]["model"] = model
+    CFG["summary"]["timeout_seconds"] = float(b.timeout_seconds)
+    save_config(CFG)
+    # 密钥优先用本次传入的；否则用凭据库里的（clear 之后自然为 None）
+    key = (b.api_key or "").strip() or get_api_key()
+    await S.engine.summ.reconfigure(base_url, model, key)
+    return _summary_settings_payload()
+
+
+class SummaryTestRequest(BaseModel):
+    base_url: str | None = None           # 临时参数，只用于本次测试，不保存
+    model: str | None = None
+    api_key: str | None = None
+
+
+@app.post("/api/settings/summary/test", dependencies=C)
+async def test_summary_settings(b: SummaryTestRequest):
+    """测试摘要 API 连通性：用当前配置或请求体里临时传入的参数，不保存任何值。"""
+    s = CFG["summary"]
+    base_url = (b.base_url or "").strip() or s.get("base_url", "")
+    model = (b.model or "").strip() or s.get("model", "")
+    if b.api_key and b.api_key.strip():
+        api_key = b.api_key.strip()
+    else:
+        api_key = get_api_key()
+    if not base_url:
+        return {"ok": False, "latency_ms": None, "model": model or "", "error": "未配置 base_url"}
+    err = validate_base_url(base_url)
+    if err:
+        return {"ok": False, "latency_ms": None, "model": model or "", "error": err}
+    if not model:
+        return {"ok": False, "latency_ms": None, "model": "", "error": "未配置模型名"}
+    if not api_key:
+        return {"ok": False, "latency_ms": None, "model": model, "error": "未配置 API 密钥，请先在设置页保存密钥"}
+    timeout = min(float(s.get("timeout_seconds", 25)) or 25.0, 20.0)
+    return await S.engine.summ.test_connection(base_url, model, api_key, timeout=timeout)
 
 
 # ---------------------------------------------------------------- Agent 接口（MCP 只调这些）

@@ -32,6 +32,14 @@ def set_api_key(value: str) -> None:
     keyring.set_password(SERVICE, CRED_API, value)
 
 
+def delete_api_key() -> None:
+    """删除摘要 API 密钥条目；条目本来就不存在时静默通过。"""
+    try:
+        keyring.delete_password(SERVICE, CRED_API)
+    except keyring.errors.PasswordDeleteError:
+        pass
+
+
 # ---------------- 平台账号凭据（P3.8，可选功能）
 # 条目名 = "platform:<平台>:<账号>"，内容 = JSON {"u": 用户名, "p": 密码}。
 # 只由控制台进程在打开平台时读取并注入登录表单；不落盘、不进日志、MCP/Agent 永远接触不到。

@@ -5,11 +5,23 @@ const $ = id => document.getElementById(id);
 const api = (p, o = {}) => fetch(p, { headers: { 'Content-Type': 'application/json' }, ...o })
   .then(async r => {
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.detail || j.error || r.status);
+    if (!r.ok) {
+      const d = j.detail;
+      const msg = typeof d === 'string' ? d
+        : (d && d.errors ? '请检查标红的输入项' : (j.error || ('HTTP ' + r.status)));
+      const e = new Error(msg); e.detail = d; throw e;
+    }
     return j;
   });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+/* 字段级校验错误：显示在对应输入框旁边的 .ferr 元素里（前缀区分不同表单） */
+function fieldErrors(prefix, e) {
+  document.querySelectorAll('.ferr').forEach(x => { x.textContent = ''; });
+  const errs = e && e.detail && e.detail.errors;
+  if (!errs || !errs.length) { alert(e.message); return; }
+  errs.forEach(x => { const el = $(prefix + x.field); if (el) el.textContent = esc(x.message); });
+}
 
 /* ---------------- 页面切换 ---------------- */
 const PAGES = ['start', 'pool', 'accounts', 'settings'];
@@ -164,6 +176,7 @@ async function resumeChat(pid, url, title) {
 }
 
 /* ---------------- 设置页 ---------------- */
+let sumPresets = {};
 async function loadSettings() {
   const s = await api('/api/settings');
   $('setOrder').value = (s.relay_order || []).join(', ');
@@ -175,6 +188,62 @@ async function loadSettings() {
   $('setArenaTimeout').value = s.agent_turn_timeout;
   $('setBatch').checked = !!s.allow_batch_approve;
   $('setInfo').innerHTML = `监听 <b>${esc(s.host)}:${esc(s.port)}</b> · 数据目录 <b>${esc(s.data_dir)}</b><br>提示：host/port/浏览器承载在 config.yaml 修改后重启生效`;
+  await loadSummarySettings();
+}
+
+/* ---------------- 设置页：摘要模型（第三方 API，A1） ---------------- */
+async function loadSummarySettings() {
+  const s = await api('/api/settings/summary');
+  sumPresets = s.presets || {};
+  $('sumProvider').value = s.provider || 'custom';
+  $('sumBaseUrl').value = s.base_url || '';
+  $('sumModel').value = s.model || '';
+  $('sumTimeout').value = s.timeout_seconds ?? 25;
+  $('sumKey').value = '';
+  $('sumKeyState').textContent = s.has_key ? '已保存（密钥存系统凭据库，不回显）' : '未保存';
+  $('sumTestResult').textContent = '';
+}
+function sumPreset() {
+  /* 预设只用来填默认值，用户仍可改 */
+  const p = sumPresets[$('sumProvider').value] || {};
+  if (p.base_url) $('sumBaseUrl').value = p.base_url;
+  if (p.model) $('sumModel').value = p.model;
+}
+function sumBody() {
+  const body = { provider: $('sumProvider').value, base_url: $('sumBaseUrl').value.trim(),
+    model: $('sumModel').value.trim(), timeout_seconds: +$('sumTimeout').value || 25 };
+  const k = $('sumKey').value.trim();
+  if (k) body.api_key = k;          // 密钥只写不读
+  return body;
+}
+async function sumSave() {
+  try {
+    const s = await api('/api/settings/summary', { method: 'POST', body: JSON.stringify(sumBody()) });
+    $('sumKey').value = '';
+    $('sumKeyState').textContent = s.has_key ? '已保存（密钥存系统凭据库，不回显）' : '未保存';
+    $('sumTestResult').textContent = '已保存并热更新，无需重启。';
+  } catch (e) { fieldErrors('ferr_', e); }
+}
+async function sumTest() {
+  $('sumTestResult').textContent = '测试中…';
+  try {
+    const r = await api('/api/settings/summary/test', { method: 'POST', body: JSON.stringify(sumBody()) });
+    $('sumTestResult').textContent = r.ok
+      ? `连接正常（${r.latency_ms} ms，模型 ${esc(r.model)}）` : `失败：${esc(r.error || '')}`;
+  } catch (e) { $('sumTestResult').textContent = `失败：${esc(e.message)}`; }
+}
+async function sumClearKey() {
+  if (!confirm('确定删除凭据库里的摘要 API 密钥？删除后摘要将回退到缓存摘要。')) return;
+  try {
+    const cur = await api('/api/settings/summary');
+    // 先取当前配置原样回传，避免只带 clear_key 时把 base_url/model 重置成预设
+    const body = { provider: cur.provider, base_url: cur.base_url, model: cur.model,
+      timeout_seconds: cur.timeout_seconds, clear_key: true };
+    const s = await api('/api/settings/summary', { method: 'POST', body: JSON.stringify(body) });
+    $('sumKey').value = '';
+    $('sumKeyState').textContent = s.has_key ? '已保存（密钥存系统凭据库，不回显）' : '未保存';
+    $('sumTestResult').textContent = '';
+  } catch (e) { alert(e.message); }
 }
 async function saveSettings() {
   const body = {
@@ -195,6 +264,7 @@ async function saveSettings() {
 const ACTIONS = {
   nav: d => show(d.nav),
   newSession, ask, publish, newAgent, newArena, showAudit, saveSettings,
+  sumSave, sumTest, sumClearKey,
   openS: d => openS(d.id),
   decide: d => decide(d.id, d.d),
   approveRound: d => approveRound(d.aid),
@@ -216,7 +286,8 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('change', e => {
   const el = e.target.closest('[data-act="autofill"]');
-  if (el) toggleAutofill(el.dataset.pid, el.checked);
+  if (el) { toggleAutofill(el.dataset.pid, el.checked); return; }
+  if (e.target.closest('[data-act="sumPreset"]')) sumPreset();
 });
 $('q').addEventListener('keydown', e => { if (e.key === 'Enter' && e.ctrlKey) ask(); });
 
