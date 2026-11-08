@@ -46,7 +46,7 @@ relay-console/
     build_exe.py            打包 Windows exe（PyInstaller，分发用）
     make_shortcut.py        生成桌面/开始菜单快捷方式（免注册表）
     create_desktop_shortcut.bat  exe 接收者用的快捷方式脚本（随包分发）
-  tests/                    离线自测（无需浏览器），50 项
+  tests/                    离线自测（无需浏览器），68 项
 ```
 
 ## 安装（Windows）
@@ -57,7 +57,7 @@ pip install -r requirements.txt          # 运行依赖
 pip install -r requirements-dev.txt      # 跑测试/打包时再装（pytest、pywin32、pyinstaller）
 copy config.example.yaml config.yaml      # 改 chrome_path、Hark 地址、接力顺序、多账号
 python scripts/setup_keys.py              # 输入摘要 API key，存入 Windows 凭据管理器
-python -m pytest -q                       # 50 项自测应全部通过
+python -m pytest -q                       # 68 项自测应全部通过
 ```
 不需要 `playwright install`，程序连接你本机安装的 Chrome（或指纹浏览器提供的 CDP）。
 
@@ -164,6 +164,18 @@ Agent 侧工具一览（详细规则见 [mcp_server/AGENT_README.md](mcp_server/
 | `check_request(request_id)` | 查询申请状态 | — |
 | `fetch_approved(request_id)` | 取回已批准内容（一次性票据，5 分钟有效） | — |
 | `submit_turn(arena_id, content)` | 提交本轮发言 | 须先读到题目 |
+
+## 登录问题排查
+打开平台报 502 时，看返回 JSON 的 `error` 字段：
+- **`CHROME_NOT_FOUND`**：`chrome_path` 不存在。到设置页改成实际安装路径；留空时程序会按
+  `%ProgramFiles%` → `%ProgramFiles(x86)%` → `%LOCALAPPDATA%` 自动探测 `Google/Chrome/Application/chrome.exe`。
+- **`PROFILE_IN_USE`**：同一个 `profiles/<平台>/<账号>` 已被另一个 Chrome 占用（那个窗口没开调试端口）。
+  先关掉那个 Chrome 窗口，再在控制台重试。
+- **`PORT_NOT_READY`**：调试端口 30 秒内没起来。确认 Chrome 能正常启动、没被安全软件拦截；
+  必要时在 `platforms.<pid>.port` 换一段端口并重启控制台。
+- **Google 登录被拦**：先不要带调试端口启动。用同一个 profile 手动开一次 Chrome：
+  `chrome.exe --user-data-dir="<仓库>/profiles/<平台>/<账号>"`，登录完成后关闭窗口，
+  再回到控制台点“打开 / 登录”。
 
 ## 安全要点
 - 平台密码默认不保存，只用你手动登录后留下的 profile。**例外**：仅当你在 `add_credential` 里主动存入并开启 `autofill` 时，控制台会用凭据库代填登录表单；凭据仍不出本机凭据库、不进任何日志或 MCP 通道。

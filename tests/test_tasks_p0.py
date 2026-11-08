@@ -158,3 +158,14 @@ def test_t4_console_host_and_printed_url(tmp_path, monkeypatch, capsys):
     assert "控制台地址" in out
     assert "http://127.0.0.1:8765/?token=" in out
     assert "http://0.0.0.0" not in out
+
+
+# ---------------- T13：可选托盘依赖与登录排查文档
+def test_t13_optional_tray_and_troubleshooting_docs():
+    req = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "pystray" in req and "Pillow" in req
+    assert req.count('; sys_platform == "win32"') >= 2      # 仅 Windows 安装
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for code in ("CHROME_NOT_FOUND", "PROFILE_IN_USE", "PORT_NOT_READY"):
+        assert code in readme
+    assert "Google 登录被拦" in readme
