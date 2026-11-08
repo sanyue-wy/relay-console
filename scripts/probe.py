@@ -13,6 +13,7 @@ import adapters  # noqa: E402
 from adapters.spec import Turn  # noqa: E402
 from relay.browser import ChromeManager  # noqa: E402
 from relay.config import load_config  # noqa: E402
+from relay.probe import probe_selectors  # noqa: E402
 
 
 async def main(pid: str, send: str | None, account: str | None):
@@ -22,12 +23,11 @@ async def main(pid: str, send: str | None, account: str | None):
                          url=cfg["platforms"].get(pid, {}).get("url"), account=account)
     await ad.start()
     input(f"[{pid}:{ad.account}] 如未登录，请在打开的 Chrome 里登录，完成后按回车继续...")
-    sel = ad.sel
-    for field in ("input", "send_button", "stop_button", "last_reply", "new_chat", "upload_input",
-                  "chat_list_item", "login_user", "login_pass", "login_submit"):
-        css = getattr(sel, field)
-        n = await ad.page.locator(css).count() if css else "-"
-        print(f"  {field:13s} {str(n):>4}  {css}")
+    result = await probe_selectors(ad)
+    for f in result["fields"]:
+        count = "--" if f["count"] is None else str(f["count"])
+        print(f"  {f['field']:13s} {count:>4}  {f['selector']}")
+    print(f"  探测结论: {'通过' if result['ok'] else '不通过'}（必检字段：input / last_reply）")
     print("  limit_state:", await ad.limit_state())
     if send:
         await ad.send(Turn("user", send, "user"))

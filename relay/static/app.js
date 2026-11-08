@@ -130,23 +130,30 @@ async function viewArena(id) {
 }
 async function showAudit() { const a = await api('/api/audit'); $('audit').textContent = a.map(x => `${new Date(x.ts * 1000).toLocaleString()} ${x.actor} ${x.action} ${x.detail}`).join('\n'); }
 
-/* ---------------- 账户页 ---------------- */
+/* ---------------- 平台与账号页（B2） ---------------- */
 async function loadAccounts() {
   const d = await api('/api/platforms');
+  cache.platforms = d.platforms;
   $('accList').innerHTML = d.platforms.map(p => `
-    <div class="card">
+    <div class="card" id="card_${esc(p.id)}">
       <h3>🌐 ${esc(p.id)}
         <span class="spacer" style="flex:1"></span>
+        <label class="ck" style="margin:0" title="关闭后不参与接力，也不出现在下拉里">
+          <input type="checkbox" ${p.enabled !== false ? 'checked' : ''} data-act="togglePlatform" data-pid="${esc(p.id)}"> 启用
+        </label>
         <label class="ck" style="margin:0" title="开启后打开平台未登录时用凭据库代填（凭据用 scripts/add_credential.py 录入）">
           <input type="checkbox" ${p.autofill ? 'checked' : ''} data-act="autofill" data-pid="${esc(p.id)}"> autofill
         </label>
       </h3>
-      ${(p.accounts || []).map(a => `<div class="item" style="cursor:default"><div class="row spread">
-          <span><span class="pill ${a.cooldown_until ? 'amber' : 'cyan'}">${esc(a.account)}</span>${a.cooldown_until ? ' <span class="sub">冷却至 ' + esc(String(a.cooldown_until).slice(11, 16)) + '</span>' : ''}</span>
-          <span class="row">
-            <button class="ghost small" data-act="openP" data-pid="${esc(p.id)}" data-account="${esc(a.account)}">打开 / 登录</button>
-            <button class="ghost small danger" data-act="delAccount" data-pid="${esc(p.id)}" data-account="${esc(a.account)}">移除</button>
-          </span></div></div>`).join('')}
+      <div class="setrow"><label>自定义 url</label>
+        <input id="purl_${esc(p.id)}" placeholder="留空用各平台默认地址（如 Hark 网页版）" value="${esc(p.url || '')}"></div>
+      <div class="setrow"><label>基础端口</label>
+        <input id="pport_${esc(p.id)}" type="number" placeholder="每个账号占 base+10*i" value="${esc(p.port ?? '')}"></div>
+      <div class="row" style="margin-top:2px">
+        <button class="btn small" data-act="savePlatform" data-pid="${esc(p.id)}">保存平台设置</button>
+        <span class="sub" id="pmsg_${esc(p.id)}"></span>
+      </div>
+      ${(p.accounts || []).map(a => platformAccountRow(p, a)).join('')}
       <div class="row" style="margin-top:8px">
         <input id="acc_${esc(p.id)}" placeholder="新账号名" style="flex:1">
         <button class="btn small" data-act="addAccount" data-pid="${esc(p.id)}">登记账号</button>
@@ -154,6 +161,85 @@ async function loadAccounts() {
       </div>
       <div id="chats_${esc(p.id)}"></div>
     </div>`).join('');
+}
+function platformAccountRow(p, a) {
+  const key = `${esc(p.id)}_${esc(a.account)}`;
+  const cd = a.cooldown_until ? `<span class="badge warn">冷却到 ${esc(String(a.cooldown_until).slice(11, 16))}</span>` : '';
+  return `<div class="item" style="cursor:default">
+    <div class="row spread">
+      <span><span class="pill ${a.cooldown_until ? 'amber' : 'cyan'}">${esc(a.account)}</span>${cd}
+        <span class="badge off" id="st_${key}">未启动</span></span>
+      <span class="row">
+        <button class="ghost small" data-act="openP" data-pid="${esc(p.id)}" data-account="${esc(a.account)}">打开并登录</button>
+        <button class="ghost small" data-act="checkLogin" data-pid="${esc(p.id)}" data-account="${esc(a.account)}">检测登录</button>
+        <button class="ghost small" data-act="probeSel" data-pid="${esc(p.id)}" data-account="${esc(a.account)}">检测选择器</button>
+        <button class="ghost small danger" data-act="delAccount" data-pid="${esc(p.id)}" data-account="${esc(a.account)}">移除</button>
+      </span>
+    </div>
+    <div class="sub" id="pinfo_${key}"></div>
+  </div>`;
+}
+async function savePlatform(pid) {
+  const body = { url: $('purl_' + pid).value.trim(), port: +$('pport_' + pid).value };
+  const el = $('pmsg_' + pid);
+  el.textContent = '保存中…';
+  try {
+    const r = await api('/api/platforms/' + encodeURIComponent(pid), { method: 'PUT', body: JSON.stringify(body) });
+    el.textContent = r.needs_restart ? '已保存；该平台浏览器开着，请用托盘重启后生效' : '已保存';
+    loadAccounts();
+  } catch (e) {
+    const errs = e.detail && e.detail.errors;
+    el.textContent = errs ? errs.map(x => x.message).join('；') : ('失败：' + e.message);
+  }
+}
+function renderStatusBadge(pid, account, r) {
+  const bits = [];
+  bits.push(r.launched ? '<span class="badge ok">已打开</span>' : '<span class="badge off">未启动</span>');
+  if (r.launched) bits.push(r.logged_in ? '<span class="badge ok">已登录</span>' : '<span class="badge warn">已打开未登录</span>');
+  if (r.cooldown_until) bits.push(`<span class="badge warn">冷却到 ${esc(String(r.cooldown_until).slice(11, 16))}</span>`);
+  const el = $('st_' + pid + '_' + account);
+  if (el) el.outerHTML = `<span class="badge off" id="st_${esc(pid)}_${esc(account)}" style="display:none"></span><span id="stbox_${esc(pid)}_${esc(account)}">${bits.join('')}</span>`;
+}
+async function checkLogin(pid, account) {
+  const el = $('pinfo_' + pid + '_' + account);
+  el.textContent = '检测中…（不会启动浏览器）';
+  try {
+    const r = await api(`/api/platforms/${encodeURIComponent(pid)}/status?account=${encodeURIComponent(account)}`);
+    renderStatusBadge(pid, account, r);
+    el.textContent = r.launched ? (r.logged_in ? '已登录' : '已打开但未登录：请在窗口里登录后重试') : '未启动：点「打开并登录」先启动';
+  } catch (e) { el.textContent = '失败：' + e.message; }
+}
+async function probeSel(pid, account) {
+  const el = $('pinfo_' + pid + '_' + account);
+  el.textContent = '探测选择器中…（会连接/打开浏览器）';
+  try {
+    const r = await api(`/api/platforms/${encodeURIComponent(pid)}/probe`, { method: 'POST', body: JSON.stringify({ account }) });
+    el.innerHTML = (r.ok ? '<span class="badge ok">通过</span>' : '<span class="badge warn">不通过</span> ') +
+      r.fields.filter(f => f.selector).map(f => `${esc(f.field)}:${f.count}`).join(' · ');
+  } catch (e) { el.textContent = '失败：' + e.message; }
+}
+async function togglePlatform(pid, on) {
+  try {
+    const r = await api('/api/platforms/' + encodeURIComponent(pid), { method: 'PUT', body: JSON.stringify({ enabled: on }) });
+    if (r.needs_restart) alert('已保存；该平台浏览器开着，请用托盘重启后生效');
+  } catch (e) { alert(e.message); loadAccounts(); }
+}
+
+/* ---------------- 设置页：Chrome 路径（B2） ---------------- */
+async function chromeDetect() {
+  try {
+    const r = await api('/api/settings/chrome/detect', { method: 'POST' });
+    if (r.path) { $('setChrome').value = r.path; $('chromeMsg').textContent = '已检测到'; }
+    else $('chromeMsg').textContent = '未在常见位置找到 Chrome，请手动填写';
+  } catch (e) { $('chromeMsg').textContent = '失败：' + e.message; }
+}
+async function chromeValidate() {
+  const p = $('setChrome').value.trim();
+  if (!p) return $('chromeMsg').textContent = '请先填写路径';
+  try {
+    const r = await api('/api/settings/chrome/validate', { method: 'POST', body: JSON.stringify({ path: p }) });
+    $('chromeMsg').textContent = r.ok ? '✓ ' + r.message : '✕ ' + r.message;
+  } catch (e) { $('chromeMsg').textContent = '失败：' + e.message; }
 }
 async function saveAccounts(pid, accounts) { return api(`/api/platforms/${encodeURIComponent(pid)}/accounts`, { method: 'POST', body: JSON.stringify({ accounts }) }); }
 async function addAccount(pid) {
@@ -163,6 +249,7 @@ async function addAccount(pid) {
   $('acc_' + pid).value = ''; loadAccounts();
 }
 async function delAccount(pid, name) {
+  if (!confirm(`确定移除账号「${name}」？其浏览器 profile 数据不会被删除。`)) return;
   const now = (await api(`/api/platforms/${encodeURIComponent(pid)}/accounts`)).accounts;
   const next = now.filter(x => x !== name);
   if (!next.length) return alert('至少保留一个账号');
@@ -192,6 +279,7 @@ async function loadSettings() {
   $('setRecent').value = s.recent_rounds_raw;
   $('setArenaTimeout').value = s.agent_turn_timeout;
   $('setBatch').checked = !!s.allow_batch_approve;
+  $('setChrome').value = s.chrome_path || '';
   $('setInfo').innerHTML = `监听 <b>${esc(s.host)}:${esc(s.port)}</b> · 数据目录 <b>${esc(s.data_dir)}</b><br>提示：host/port/浏览器承载在 config.yaml 修改后重启生效`;
   await loadSummarySettings();
 }
@@ -260,6 +348,7 @@ async function saveSettings() {
     recent_rounds_raw: +$('setRecent').value,
     agent_turn_timeout: +$('setArenaTimeout').value,
     allow_batch_approve: $('setBatch').checked,
+    chrome_path: $('setChrome').value.trim(),
   };
   try { await api('/api/settings', { method: 'POST', body: JSON.stringify(body) }); alert('已保存并写入 config.yaml'); }
   catch (e) { alert(e.message); }
@@ -375,6 +464,8 @@ const ACTIONS = {
   sumSave, sumTest, sumClearKey,
   hoOpen, hoClose, hoRefresh, hoSaveSummary, hoTo2, hoBack1: () => hoStep(1), hoBack2: () => hoStep(2),
   hoTo3, hoGo, hoGoSettings,
+  savePlatform: d => savePlatform(d.pid), checkLogin: d => checkLogin(d.pid, d.account),
+  probeSel: d => probeSel(d.pid, d.account), chromeDetect, chromeValidate,
   openS: d => openS(d.id),
   decide: d => decide(d.id, d.d),
   approveRound: d => approveRound(d.aid),
@@ -397,6 +488,8 @@ document.addEventListener('click', e => {
 document.addEventListener('change', e => {
   const el = e.target.closest('[data-act="autofill"]');
   if (el) { toggleAutofill(el.dataset.pid, el.checked); return; }
+  const tgl = e.target.closest('[data-act="togglePlatform"]');
+  if (tgl) { togglePlatform(tgl.dataset.pid, tgl.checked); return; }
   if (e.target.closest('[data-act="sumPreset"]')) sumPreset();
   if (e.target.id === 'hoPlatform') hoFillAccounts();
   if (e.target.id === 'hoAccount') hoProbeStatus();

@@ -350,7 +350,14 @@
       </div>
       <div class="card">
         <h3>ℹ️ 运行信息</h3>
-        <div class="sub" id="setInfo"></div>
+        <div class="setrow"><label>Chrome 路径</label>
+          <input id="setChrome" placeholder="C:/Program Files/Google/Chrome/Application/chrome.exe"></div>
+        <div class="row" style="margin-left:158px">
+          <button class="ghost small" data-act="chromeDetect">自动检测</button>
+          <button class="ghost small" data-act="chromeValidate">校验</button>
+          <span class="sub" id="chromeMsg"></span>
+        </div>
+        <div class="sub" id="setInfo" style="margin-top:8px"></div>
         <button class="btn" style="margin-top:10px" data-act="saveSettings">保存设置</button>
         <div class="hint">保存立即生效并写回 config.yaml（注释不保留）；凭据与密钥只存系统凭据库，不在此页</div>
       </div>

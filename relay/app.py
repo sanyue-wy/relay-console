@@ -24,12 +24,15 @@ from adapters.spec import AdapterError
 
 from .arena import ArenaRunner
 from .browser import ChromeManager
-from .config import APP_VERSION, data_home, load_config, platform_accounts, save_config
+from .config import (APP_VERSION, data_home, find_chrome, load_config, platform_accounts,
+                     save_config)
+from .config_schema import port_conflicts, validate_platform
 from .crypto import (CRED_ARENA, CRED_MAIN, delete_api_key, get_api_key, get_fernet,
                      get_platform_credential, set_api_key)
 from .relay_engine import ManualHandoffError, RelayEngine
 from .storage import ArenaPool, MainPool, PoolError
 from .summarizer import (PROVIDER_PRESETS, Summarizer, friendly_api_error, validate_base_url)
+from .probe import probe_selectors
 
 CFG = load_config()
 log = logging.getLogger("relay.app")
@@ -237,7 +240,14 @@ class OpenPlatform(BaseModel):
 
 @app.get("/api/platforms", dependencies=C)
 def platforms():
-    return {"platforms": S.engine.platform_status(), "relay_order": CFG["relay_order"]}
+    """控制台用：平台状态 + 本机端口/url 配置。Agent 的会话状态只走 engine.platform_status，
+    不会带上这两个配置项（Agent 读不到配置）。"""
+    out = []
+    for p in S.engine.platform_status():
+        pid = p["id"]
+        out.append(p | {"url": CFG["platforms"].get(pid, {}).get("url"),
+                        "port": CFG["platforms"].get(pid, {}).get("port")})
+    return {"platforms": out, "relay_order": CFG["relay_order"]}
 
 
 @app.post("/api/platforms/{pid}/open", dependencies=C)
@@ -287,6 +297,8 @@ def sessions():
 def new_session(b: NewSession):
     if b.platform not in adapters.available():
         raise HTTPException(400, "unknown platform")
+    if not bool(CFG["platforms"].get(b.platform, {}).get("enabled", True)):
+        raise HTTPException(400, "平台已停用；请先在「平台与账号」页重新启用")
     accounts = platform_accounts(CFG, b.platform)
     account = b.account if b.account in accounts else accounts[0]
     return {"id": S.main.create_session(b.title, b.platform, account=account)}
@@ -551,6 +563,7 @@ class SettingsUpdate(BaseModel):
     recent_rounds_raw: int | None = None
     agent_turn_timeout: int | None = None
     allow_batch_approve: bool | None = None
+    chrome_path: str | None = None
 
 
 @app.get("/api/settings", dependencies=C)
@@ -563,7 +576,8 @@ def get_settings():
             "every_n_turns": CFG["summary"].get("every_n_turns", 4),
             "recent_rounds_raw": CFG["summary"].get("recent_rounds_raw", 3),
             "agent_turn_timeout": CFG["arena"].get("agent_turn_timeout", 600),
-            "allow_batch_approve": CFG["arena"].get("allow_batch_approve", False)}
+            "allow_batch_approve": CFG["arena"].get("allow_batch_approve", False),
+            "chrome_path": CFG.get("chrome_path", "")}
 
 
 @app.post("/api/settings", dependencies=C)
@@ -589,6 +603,11 @@ def update_settings(b: SettingsUpdate):
         CFG["arena"]["agent_turn_timeout"] = max(30, int(b.agent_turn_timeout))
     if b.allow_batch_approve is not None:
         CFG["arena"]["allow_batch_approve"] = bool(b.allow_batch_approve)
+    if b.chrome_path is not None:
+        p = b.chrome_path.strip()
+        if not p:
+            raise HTTPException(400, "chrome_path 不能为空")
+        CFG["chrome_path"] = p
     save_config(CFG)
     return get_settings()
 
@@ -622,6 +641,106 @@ def update_accounts(pid: str, b: AccountsUpdate):
         CFG["platforms"].setdefault(pid, {})["autofill"] = bool(b.autofill)
     save_config(CFG)
     return get_accounts(pid)
+
+
+# ---------------------------------------------------------------- 控制台：平台与账号（B2）
+@app.get("/api/platforms/{pid}/status", dependencies=C)
+async def platform_account_status(pid: str, account: str | None = None):
+    """单账号状态：{launched, logged_in, cooldown_until}。未启动时不试图启动。"""
+    if pid not in adapters.available():
+        raise HTTPException(400, "unknown platform")
+    accounts = platform_accounts(CFG, pid)
+    acct = account or (accounts or ["main"])[0]
+    if acct not in accounts:
+        raise HTTPException(400, f"{pid} 没有登记账号 {acct}")
+    return await S.engine.account_status(pid, acct)
+
+
+class ProbeRequest(BaseModel):
+    account: str | None = None
+
+
+@app.post("/api/platforms/{pid}/probe", dependencies=C)
+async def platform_probe(pid: str, b: ProbeRequest):
+    """选择器探测：逐个检查 selectors.yaml 匹配数；不做收发测试。"""
+    if pid not in adapters.available():
+        raise HTTPException(400, "unknown platform")
+    acct = b.account or "main"
+    if acct not in platform_accounts(CFG, pid):
+        raise HTTPException(400, f"{pid} 没有登记账号 {acct}")
+    ad = await S.engine.adapter(pid, acct)      # 探测需要连页面（未登录会提示先登录）
+    out = await probe_selectors(ad)
+    return out | {"platform": pid, "account": acct}
+
+
+class PlatformUpdate(BaseModel):
+    enabled: bool | None = None
+    url: str | None = None
+    port: int | None = None
+    accounts: list[str] | None = None
+
+
+@app.put("/api/platforms/{pid}", dependencies=C)
+def update_platform(pid: str, b: PlatformUpdate):
+    """平台卡片保存（B1 校验）：enabled/url/port/accounts。改端口或 url 且浏览器开着 → needs_restart。"""
+    if pid not in adapters.available():
+        raise HTTPException(400, "unknown platform")
+    cur = dict(CFG["platforms"].get(pid) or {})
+    merged = {"enabled": bool(cur.get("enabled", True)),
+              "url": cur.get("url") or None,
+              "port": cur.get("port"),
+              "accounts": list(cur.get("accounts") or ["main"]),
+              "autofill": bool(cur.get("autofill", False))}
+    if b.enabled is not None:
+        merged["enabled"] = bool(b.enabled)
+    if b.url is not None:
+        merged["url"] = b.url.strip() or None       # 清空 = 回到默认 url
+    if b.port is not None:
+        merged["port"] = b.port
+    if b.accounts is not None:
+        merged["accounts"] = [x.strip() for x in b.accounts if x and x.strip()]
+    cleaned, errors = validate_platform(pid, merged)
+    if errors:
+        raise HTTPException(400, {"error": "VALIDATION", "errors": errors})
+    # 全局端口冲突（与 ChromeManager 启动校验同一套规则）
+    hypothetical = {k: (cleaned if k == pid else v) for k, v in CFG["platforms"].items()}
+    conflicts = port_conflicts(hypothetical)
+    if conflicts:
+        raise HTTPException(400, {"error": "VALIDATION", "errors": [
+            {"field": f"platforms.{pid}.port", "message": "；".join(conflicts)}]})
+    old_port, old_url = cur.get("port"), cur.get("url") or None
+    CFG["platforms"][pid] = cleaned
+    save_config(CFG)
+    changed_critical = (cleaned["port"] != old_port) or (cleaned["url"] != old_url)
+    needs_restart = bool(changed_critical and S.browser.platform_open(pid))
+    return {"ok": True, "needs_restart": needs_restart, "platform": cleaned}
+
+
+# ---------------------------------------------------------------- 控制台：Chrome 路径（B2）
+class ChromePathRequest(BaseModel):
+    path: str
+
+
+@app.post("/api/settings/chrome/detect", dependencies=C)
+def chrome_detect():
+    """自动检测常见安装位置的 Chrome（复用 config.find_chrome）。"""
+    return {"path": find_chrome()}
+
+
+@app.post("/api/settings/chrome/validate", dependencies=C)
+def chrome_validate(b: ChromePathRequest):
+    """校验 Chrome 路径：文件是否存在、是不是 chrome.exe。"""
+    from pathlib import Path as _P
+    p = _P(b.path.strip())
+    exists = p.exists()
+    is_chrome = exists and p.name.lower() == "chrome.exe"
+    if not exists:
+        message = "文件不存在，请确认路径"
+    elif not is_chrome:
+        message = "不是 chrome.exe（请选择 Chrome 的安装路径下的 chrome.exe）"
+    else:
+        message = "有效"
+    return {"ok": is_chrome, "exists": exists, "is_chrome": is_chrome, "message": message}
 
 
 # ---------------------------------------------------------------- 控制台：摘要模型设置（A1）

@@ -13,6 +13,7 @@ from adapters.spec import (AdapterError, Cap, LimitReached, LimitState, LimitSta
 
 from .browser import ChromeManager
 from .config import platform_accounts
+from .fingerprint import FingerprintError, resolve_profile_id
 from .storage import MainPool
 from .summarizer import CONFIRM_QUESTION, Summarizer
 
@@ -110,8 +111,35 @@ class RelayEngine:
                 cd = self.cooldowns.get((pid, a))
                 accounts.append({"account": a,
                                  "cooldown_until": cd.isoformat() if cd and cd > now else None})
-            out.append({"id": pid, "accounts": accounts,
+            out.append({"id": pid, "enabled": self._enabled(pid), "accounts": accounts,
                         "autofill": bool(self.cfg["platforms"].get(pid, {}).get("autofill"))})
+        return out
+
+    def _enabled(self, pid: str) -> bool:
+        """平台启用开关（B2）：关闭后不参与接力。"""
+        return bool(self.cfg["platforms"].get(pid, {}).get("enabled", True))
+
+    async def account_status(self, pid: str, account: str) -> dict:
+        """单账号状态（B2）：未启动/已打开未登录/已登录 + 冷却；绝不启动任何浏览器。"""
+        now = datetime.now()
+        cd = self.cooldowns.get((pid, account))
+        out = {"platform": pid, "account": account, "launched": False, "logged_in": False,
+               "cooldown_until": cd.isoformat() if cd and cd > now else None}
+        launched = self.browser.is_launched(pid, account) if self.browser else False
+        if not launched and self.browser and self.browser.backend is not None:
+            # 指纹承载：问客户端该环境是否已在运行（不启动它）
+            try:
+                profile_id = resolve_profile_id(self.browser.profile_map, pid, account)
+                launched = bool(await self.browser.backend.is_running(profile_id))
+            except FingerprintError:
+                launched = False
+        out["launched"] = bool(launched)
+        if launched:
+            try:
+                ad = await self.adapter(pid, account)
+                out["logged_in"] = bool(await ad.health())
+            except Exception:
+                out["logged_in"] = False
         return out
 
     def _cool(self, key: tuple[str, str], reset_at: datetime | None) -> None:
@@ -145,6 +173,9 @@ class RelayEngine:
             nxt = self.policy.next(cur_pid, cool_pids, tried_pids)
             if not nxt or nxt in seen:
                 return None
+            if not self._enabled(nxt):
+                seen.add(nxt)            # 已停用平台（B2）：视为已处理，换下一个
+                continue
             seen.add(nxt)
             for a in self.accounts(nxt):
                 if (nxt, a) not in tried and not self._cooling((nxt, a)):
@@ -281,6 +312,8 @@ class RelayEngine:
             raise ManualHandoffError("BAD_TARGET", f"未知平台 {platform}")
         if account not in self.accounts(platform):
             raise ManualHandoffError("BAD_TARGET", f"{platform} 没有登记账号 {account}；请先在账户页登记")
+        if not self._enabled(platform):
+            raise ManualHandoffError("BAD_TARGET", f"平台 {platform} 已停用；请先在平台卡片重新启用")
         if (platform, account or "main") == (s.current_platform, s.account or "main"):
             raise ManualHandoffError("SAME_TARGET", "目标就是当前平台和账号，无需切换")
         account = account or "main"

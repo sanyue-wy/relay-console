@@ -71,6 +71,26 @@ class ChromeManager:
             raise RuntimeError(f"{pid} 最多支持 10 个账号（端口段 base+0..base+90）")
         return base + 10 * idx
 
+    def is_launched(self, pid: str, account: str | None = None) -> bool:
+        """该平台账号的浏览器是否已打开（绝不启动它）。
+
+        chrome 承载看调试端口是否在监听；指纹承载看本进程是否已有 CDP 连接。
+        """
+        br = self._browsers.get((pid, account or "main"))
+        if br is not None and br.is_connected():
+            return True
+        if self.backend is None:
+            try:
+                return _port_open(self._port(pid, account))
+            except Exception:
+                return False
+        return False
+
+    def platform_open(self, pid: str) -> bool:
+        """该平台是否有任何账号的浏览器开着（改 url/端口后提示重启用）。"""
+        accounts = platform_accounts(self.cfg, pid)
+        return any(self.is_launched(pid, a) for a in accounts)
+
     def launch(self, pid: str, url: str, account: str | None = None) -> None:
         account = account or "main"
         chrome = Path(str(self.cfg.get("chrome_path") or ""))

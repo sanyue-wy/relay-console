@@ -124,6 +124,10 @@ class AntidetectBackend:
     async def list_profiles(self) -> list[Profile]:
         raise NotImplementedError
 
+    async def is_running(self, profile_id: str) -> bool | None:
+        """环境是否已在运行（绝不启动它）；None = 该后端无法不启动就探测。"""
+        return None
+
     @staticmethod
     def _endpoint(data: dict[str, Any]) -> str | None:
         ws = data.get("ws")
@@ -197,6 +201,15 @@ class AdsPowerBackend(AntidetectBackend):
             for row in rows
             if row.get("user_id")
         ]
+
+    async def is_running(self, profile_id: str) -> bool | None:
+        """AdsPower 的 active 接口可在不启动环境的情况下查询运行状态。"""
+        try:
+            body = await self._request("GET", "/api/v1/browser/active",
+                                       params={"user_id": profile_id})
+        except FingerprintError:
+            return None          # 客户端没开/API 不可达：状态未知，当作未运行
+        return body.get("code") == 0 and (body.get("data") or {}).get("status") == "Active"
 
 
 class OvoBrowserBackend(AntidetectBackend):
