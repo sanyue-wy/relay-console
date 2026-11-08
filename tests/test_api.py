@@ -34,6 +34,18 @@ def test_auth_and_approval_loop(tmp_path, monkeypatch):
         assert c.post(f"/agent/requests/{rid}/fetch", headers=A).json()["error"] == "TICKET_USED"
 
 
+def test_auto_open_url_rules(monkeypatch):
+    base = {"host": "127.0.0.1", "port": 8765, "auto_open_browser": True}
+    url = appmod._auto_open_url(base)
+    assert url and url.startswith("http://127.0.0.1:8765/?token=")
+    # 0.0.0.0 归一化为 127.0.0.1
+    assert appmod._auto_open_url({**base, "host": "0.0.0.0"}).startswith("http://127.0.0.1:")
+    # 配置关闭 / 程序化启动环境变量 → 不自动打开
+    assert appmod._auto_open_url({**base, "auto_open_browser": False}) is None
+    monkeypatch.setenv("RELAY_NO_OPEN", "1")
+    assert appmod._auto_open_url(dict(base)) is None
+
+
 def test_resume_chat_and_session_status(tmp_path, monkeypatch):
     with make_client(tmp_path, monkeypatch) as c:
         H = {"X-Console-Token": appmod.CONSOLE_TOKEN}

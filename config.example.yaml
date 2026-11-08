@@ -1,6 +1,7 @@
 # 复制为 config.yaml 后修改
 host: 127.0.0.1
 port: 8765
+auto_open_browser: true     # 启动后自动用默认浏览器打开控制台（false 关闭；脚本启动可设 RELAY_NO_OPEN=1）
 chrome_path: "C:/Program Files/Google/Chrome/Application/chrome.exe"
 data_dir: ./data
 profiles_dir: ./profiles

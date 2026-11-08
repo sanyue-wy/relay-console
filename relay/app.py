@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
+import webbrowser
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -43,6 +45,26 @@ class State:
 S = State()
 
 
+def _auto_open_url(cfg) -> str | None:
+    """返回启动后应自动打开的控制台地址；不该自动打开时返回 None。"""
+    if not cfg.get("auto_open_browser", True):
+        return None
+    if os.environ.get("RELAY_NO_OPEN") == "1":      # 脚本/测试等程序化启动可显式关闭
+        return None
+    host = cfg["host"]
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
+    return f"http://{host}:{int(cfg['port'])}/?token={CONSOLE_TOKEN}"
+
+
+def _schedule_auto_open(cfg) -> None:
+    url = _auto_open_url(cfg)
+    if not url:
+        return
+    # 延迟 1.2s：等 uvicorn 完成绑定并开始服务，避免浏览器抢跑打到未就绪端口
+    asyncio.get_running_loop().call_later(1.2, lambda: webbrowser.open(url))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     S.main = MainPool(CFG["data_dir"], get_fernet(CRED_MAIN))
@@ -62,6 +84,7 @@ async def lifespan(app: FastAPI):
         (data_home() / "console_url.txt").write_text(url, encoding="utf-8")
     except OSError:
         pass
+    _schedule_auto_open(CFG)
     yield
     await S.browser.close()
 
