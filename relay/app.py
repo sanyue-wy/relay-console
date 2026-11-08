@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import secrets
 import webbrowser
@@ -30,6 +31,7 @@ from .storage import ArenaPool, MainPool, PoolError
 from .summarizer import Summarizer
 
 CFG = load_config()
+log = logging.getLogger("relay.app")
 CONSOLE_TOKEN = secrets.token_urlsafe(24)          # 写进 cookie 的长期令牌
 _BOOTSTRAP_TOKEN: str | None = secrets.token_urlsafe(24)   # 只用于启动时换 cookie，一次即废
 STATIC = Path(__file__).with_name("static")
@@ -143,6 +145,13 @@ async def _pool_err(_, e: PoolError):
 @app.exception_handler(AdapterError)
 async def _adapter_err(_, e: AdapterError):
     return JSONResponse({"error": e.code, "detail": str(e)}, status_code=502)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_err(_, e: Exception):
+    # 未预期异常也回 JSON，前端 api() 才能显示可读信息；完整堆栈进日志
+    log.error("未处理异常: %s", e, exc_info=(type(e), e, e.__traceback__))
+    return JSONResponse({"error": type(e).__name__, "detail": str(e)[:300]}, status_code=500)
 
 
 # ---------------------------------------------------------------- 身份
