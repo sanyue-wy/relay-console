@@ -139,3 +139,22 @@ def test_t3_load_config_fills_empty_chrome_path(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "nope2"))
     cfg = load_config()
     assert cfg["chrome_path"] == str(pf)
+
+
+# ---------------- T4：0.0.0.0 打印地址换成 127.0.0.1
+def test_t4_console_host_and_printed_url(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("RELAY_NO_OPEN", "1")
+    monkeypatch.setitem(appmod.CFG, "host", "0.0.0.0")
+    monkeypatch.setitem(appmod.CFG, "port", 8765)
+    assert appmod._console_host({"host": "0.0.0.0"}) == "127.0.0.1"
+    assert appmod._console_host({"host": "::"}) == "127.0.0.1"
+    assert appmod._console_host({"host": "127.0.0.1"}) == "127.0.0.1"
+    assert appmod.mint_bootstrap_url({"host": "0.0.0.0", "port": 8765}).startswith(
+        "http://127.0.0.1:8765/?token=")
+
+    with make_client(tmp_path, monkeypatch):
+        pass
+    out = capsys.readouterr().out
+    assert "控制台地址" in out
+    assert "http://127.0.0.1:8765/?token=" in out
+    assert "http://0.0.0.0" not in out

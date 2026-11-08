@@ -49,6 +49,12 @@ class State:
 S = State()
 
 
+def _console_host(cfg) -> str:
+    """打印/打开用主机：监听 0.0.0.0 或 :: 时换成 127.0.0.1（TrustedHost 只放行本机）。"""
+    host = str(cfg["host"])
+    return "127.0.0.1" if host in ("0.0.0.0", "::") else host
+
+
 def _auto_open_url(cfg) -> str | None:
     """返回启动后应自动打开的控制台地址；不该自动打开时返回 None。"""
     if not cfg.get("auto_open_browser", True):
@@ -57,10 +63,7 @@ def _auto_open_url(cfg) -> str | None:
         return None
     if not _BOOTSTRAP_TOKEN:                        # 已经用掉（一次性）
         return None
-    host = cfg["host"]
-    if host in ("0.0.0.0", "::"):
-        host = "127.0.0.1"
-    return f"http://{host}:{int(cfg['port'])}/?token={_BOOTSTRAP_TOKEN}"
+    return f"http://{_console_host(cfg)}:{int(cfg['port'])}/?token={_BOOTSTRAP_TOKEN}"
 
 
 def mint_bootstrap_url(cfg=None) -> str | None:
@@ -68,10 +71,7 @@ def mint_bootstrap_url(cfg=None) -> str | None:
     global _BOOTSTRAP_TOKEN
     cfg = cfg or CFG
     _BOOTSTRAP_TOKEN = secrets.token_urlsafe(24)
-    host = cfg["host"]
-    if host in ("0.0.0.0", "::"):
-        host = "127.0.0.1"
-    return f"http://{host}:{int(cfg['port'])}/?token={_BOOTSTRAP_TOKEN}"
+    return f"http://{_console_host(cfg)}:{int(cfg['port'])}/?token={_BOOTSTRAP_TOKEN}"
 
 
 def _schedule_auto_open(cfg) -> None:
@@ -95,7 +95,7 @@ async def lifespan(app: FastAPI):
         browser_desc = f"指纹浏览器 {S.browser.backend_name}（每个平台账号一个环境）"
     print(f"\n  Relay Console v{APP_VERSION}", flush=True)
     print(f"  浏览器承载: {browser_desc}", flush=True)
-    url = f"http://{CFG['host']}:{CFG['port']}/?token={_BOOTSTRAP_TOKEN}"
+    url = f"http://{_console_host(CFG)}:{CFG['port']}/?token={_BOOTSTRAP_TOKEN}"
     print(f"  控制台地址（一次性，打开后即失效）: {url}\n", flush=True)
     try:
         (data_home() / "console_url.txt").write_text(url, encoding="utf-8")
