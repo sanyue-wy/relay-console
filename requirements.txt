@@ -7,3 +7,5 @@ cryptography>=42
 keyring>=25
 pyyaml>=6
 mcp>=1.2
+pystray>=0.19          # 右下角托盘图标（Windows）
+Pillow>=10             # 托盘图标绘制

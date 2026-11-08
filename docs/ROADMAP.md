@@ -100,6 +100,10 @@
   `save_config` 临时文件 + `os.replace` 原子替换，并把数据路径写回相对形式。
 - **工程**：`Config.__getattr__` 抛 `AttributeError`；`requirements-dev.txt` 拆分
   pytest/pywin32/pyinstaller；`RelayConsole.spec` 不再入库（由 build_exe 现场生成）。
+- **托盘（2026-11-08 追加）**：`run_console.py` 启动后在 Windows 右下角显示托盘图标；
+  双击/“打开控制台”生成新的一次性地址；右键“重启控制台”在原进程内重新加载
+  `config.yaml` 与 `relay.app`（不用 `os.execv`——本机带空格路径下实测会拼坏 argv）；
+  “退出”停服务。依赖 `pystray` + `Pillow`，缺失时自动跳过托盘。
 
 ### 本轮未做（记录取舍）
 - **异步路径里的同步 sqlite**：改为 `asyncio.to_thread` / aiosqlite 会牵动整个存储层

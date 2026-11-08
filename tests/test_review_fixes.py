@@ -158,3 +158,35 @@ def test_ask_rolls_back_user_message_on_failure(tmp_path):
     with pytest.raises(AdapterError):
         asyncio.run(eng.ask(sid, "hello", timeout=1))
     assert main.messages(sid) == []
+
+
+# ---------------- 托盘：一次性地址与重启循环
+def test_mint_bootstrap_url_rotates_token():
+    old = appmod._BOOTSTRAP_TOKEN
+    try:
+        u1 = appmod.mint_bootstrap_url({"host": "127.0.0.1", "port": 8765})
+        u2 = appmod.mint_bootstrap_url({"host": "0.0.0.0", "port": 8765})
+        assert u1 != u2 and u1.startswith("http://127.0.0.1:8765/?token=")
+        assert u2.startswith("http://127.0.0.1:8765/?token=")   # 0.0.0.0 归一化
+        assert appmod._BOOTSTRAP_TOKEN and appmod._BOOTSTRAP_TOKEN in u2
+    finally:
+        appmod._BOOTSTRAP_TOKEN = old
+
+
+def test_run_once_returns_restart(monkeypatch):
+    import run_console
+
+    class FakeServer:
+        def __init__(self, config):
+            self.should_exit = False
+
+        def run(self):
+            pass
+
+    def fake_tray(server, cfg, action):
+        action["value"] = "restart"
+        return None
+
+    monkeypatch.setattr(run_console.uvicorn, "Server", FakeServer)
+    monkeypatch.setattr(run_console, "start_tray", fake_tray)
+    assert run_console.run_once(reload_app=False) == "restart"

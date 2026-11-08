@@ -36,9 +36,10 @@ def main() -> None:
         # 控制台界面（app.py 按 __file__ 相对路径读取）+ 配置模板（首次引导/升级合并用）
         "--add-data", f"{ROOT / 'relay' / 'static'}{sep}relay/static",
         "--add-data", f"{ROOT / 'config.example.yaml'}{sep}.",
-        # playwright 需要 node driver；keyring 靠运行时发现后端
+        # playwright 需要 node driver；keyring 靠运行时发现后端；pystray 的 win32 后端是动态导入
         "--collect-all", "playwright",
         "--collect-all", "keyring",
+        "--collect-all", "pystray",
         # uvicorn 运行时动态导入的子模块
         "--hidden-import", "uvicorn.logging",
         "--hidden-import", "uvicorn.loops", "--hidden-import", "uvicorn.loops.auto",

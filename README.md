@@ -46,7 +46,7 @@ relay-console/
     build_exe.py            打包 Windows exe（PyInstaller，分发用）
     make_shortcut.py        生成桌面/开始菜单快捷方式（免注册表）
     create_desktop_shortcut.bat  exe 接收者用的快捷方式脚本（随包分发）
-  tests/                    离线自测（无需浏览器），48 项
+  tests/                    离线自测（无需浏览器），50 项
 ```
 
 ## 安装（Windows）
@@ -57,7 +57,7 @@ pip install -r requirements.txt          # 运行依赖
 pip install -r requirements-dev.txt      # 跑测试/打包时再装（pytest、pywin32、pyinstaller）
 copy config.example.yaml config.yaml      # 改 chrome_path、Hark 地址、接力顺序、多账号
 python scripts/setup_keys.py              # 输入摘要 API key，存入 Windows 凭据管理器
-python -m pytest -q                       # 48 项自测应全部通过
+python -m pytest -q                       # 50 项自测应全部通过
 ```
 不需要 `playwright install`，程序连接你本机安装的 Chrome（或指纹浏览器提供的 CDP）。
 
@@ -67,6 +67,9 @@ python -m pytest -q                       # 48 项自测应全部通过
   `--remove` 两步删除）。控制台窗口保持打开就是服务在跑，关窗即停止。
 - **exe 接收者**：程序目录里有 **`创建桌面快捷方式.bat`**，双击即得桌面快捷方式。
 - 想钉到任务栏：开始菜单搜 Relay Console → 右键 → 固定到任务栏（系统自带操作，同样不碰注册表）。
+- **右下角托盘**：运行期间会显示一个紫色「R」图标。双击（或右键「打开控制台」）会生成一个新的
+  一次性地址并打开；右键「重启控制台」会在原进程内重新加载 `config.yaml` 和 app（改了端口/平台/
+  指纹设置后用它）；右键「退出」停止服务。没装 pystray 时会自动跳过托盘，不影响控制台运行。
 
 ## 首次使用
 1. **登录各平台**，二选一：
@@ -74,7 +77,8 @@ python -m pytest -q                       # 48 项自测应全部通过
    - **指纹浏览器**：见下文[指纹隔离](#指纹隔离可选p3-7)，在每个环境里手动登录一次。
 2. probe 会打印每个选择器匹配到的数量；为 0 的按页面实际结构改 `adapters/selectors.yaml`。
    加 `--send "你好"` 做一次完整收发测试；输出末尾还会试读侧栏历史会话条数（chat_list_item）。
-3. `python run_console.py`，用终端打印的带 token 地址打开控制台（token 每次启动重新生成）。
+3. `python run_console.py`（或双击 `启动控制台.bat`），用终端打印的**一次性** token 地址打开控制台；
+   地址用过即失效，之后靠 HttpOnly cookie。忘了地址就点右下角托盘图标，它会生成一个新的。
 
 > selectors.yaml 里的选择器是起步值，网页经常改版，以 probe 结果为准。
 

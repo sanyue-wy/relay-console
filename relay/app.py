@@ -61,6 +61,17 @@ def _auto_open_url(cfg) -> str | None:
     return f"http://{host}:{int(cfg['port'])}/?token={_BOOTSTRAP_TOKEN}"
 
 
+def mint_bootstrap_url(cfg=None) -> str | None:
+    """生成新的一次性登录地址（托盘/启动器用）；旧的一次性 token 立即作废。"""
+    global _BOOTSTRAP_TOKEN
+    cfg = cfg or CFG
+    _BOOTSTRAP_TOKEN = secrets.token_urlsafe(24)
+    host = cfg["host"]
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
+    return f"http://{host}:{int(cfg['port'])}/?token={_BOOTSTRAP_TOKEN}"
+
+
 def _schedule_auto_open(cfg) -> None:
     url = _auto_open_url(cfg)
     if not url:
@@ -91,6 +102,12 @@ async def lifespan(app: FastAPI):
     _schedule_auto_open(CFG)
     yield
     await S.browser.close()
+    # 托盘“重启”会在同一进程里重载模块：先把两个库的连接关掉，避免句柄泄漏
+    for pool in (getattr(S, "main", None), getattr(S, "arena", None)):
+        try:
+            pool.db.conn.close()
+        except Exception:
+            pass
 
 
 app = FastAPI(title="Relay Console", lifespan=lifespan)
