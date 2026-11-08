@@ -16,7 +16,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 import adapters
@@ -35,6 +35,13 @@ log = logging.getLogger("relay.app")
 CONSOLE_TOKEN = secrets.token_urlsafe(24)          # 写进 cookie 的长期令牌
 _BOOTSTRAP_TOKEN: str | None = secrets.token_urlsafe(24)   # 只用于启动时换 cookie，一次即废
 STATIC = Path(__file__).with_name("static")
+
+# 换票页：脚本必须外置（CSP script-src 'self'），token 从 location.search 读取
+_LOGIN_PAGE = """<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>Relay Console</title>
+<style>body{margin:0;height:100vh;display:grid;place-items:center;background:#020617;color:#fff;
+font:14px/1.6 ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif}</style></head>
+<body><div id="msg">正在登录控制台…</div><script src="/auth.js" defer></script></body></html>"""
 
 
 class State:
@@ -168,19 +175,39 @@ def require_agent(authorization: str | None = Header(None)) -> str:
 
 @app.get("/")
 def index(request: Request, token: str | None = None):
-    global _BOOTSTRAP_TOKEN
-    if token and _BOOTSTRAP_TOKEN and secrets.compare_digest(token, _BOOTSTRAP_TOKEN):
-        _BOOTSTRAP_TOKEN = None          # 一次性：换成 cookie 后立即作废
-        try:
-            (data_home() / "console_url.txt").unlink(missing_ok=True)   # 不把已用 token 留在磁盘
-        except OSError:
-            pass
-        resp = RedirectResponse("/")
-        resp.set_cookie("console_token", CONSOLE_TOKEN, httponly=True, samesite="strict")
-        return resp
+    if token:
+        # 只验证并返回换票页面：GET 不消耗 token，避免浏览器预取/预览提前用掉
+        if _BOOTSTRAP_TOKEN and secrets.compare_digest(token, _BOOTSTRAP_TOKEN):
+            return HTMLResponse(_LOGIN_PAGE)
+        raise HTTPException(401, "登录链接已失效，请从右下角托盘重新生成")
     if not secrets.compare_digest(request.cookies.get("console_token") or "", CONSOLE_TOKEN):
         raise HTTPException(401, "用启动时打印的带 token 地址打开")
     return FileResponse(STATIC / "index.html")
+
+
+class Exchange(BaseModel):
+    token: str
+
+
+@app.post("/auth/exchange")
+def auth_exchange(b: Exchange):
+    """一次性 token 换 HttpOnly cookie：POST 才消耗，换完立即作废。"""
+    global _BOOTSTRAP_TOKEN
+    if not _BOOTSTRAP_TOKEN or not secrets.compare_digest(b.token, _BOOTSTRAP_TOKEN):
+        raise HTTPException(401, "登录链接已失效，请从右下角托盘重新生成")
+    _BOOTSTRAP_TOKEN = None
+    try:
+        (data_home() / "console_url.txt").unlink(missing_ok=True)   # 不把已用 token 留在磁盘
+    except OSError:
+        pass
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie("console_token", CONSOLE_TOKEN, httponly=True, samesite="strict")
+    return resp
+
+
+@app.get("/auth.js")
+def auth_js():
+    return FileResponse(STATIC / "auth.js", media_type="application/javascript")
 
 
 @app.get("/app.js")

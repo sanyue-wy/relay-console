@@ -51,11 +51,19 @@ def test_bootstrap_token_is_one_time(tmp_path, monkeypatch):
     monkeypatch.setitem(appmod.CFG, "data_dir", str(tmp_path))
     monkeypatch.setattr(appmod, "_BOOTSTRAP_TOKEN", "boot-test")
     with TestClient(appmod.app, base_url="http://127.0.0.1") as c:
+        # GET 只返回换票页，不消耗 token、不写 cookie（防浏览器预取）
         r = c.get("/?token=boot-test", follow_redirects=False)
-        assert r.status_code in (302, 307) and "console_token" in r.headers["set-cookie"]
-        # 同一 bootstrap token 第二次使用不再有效（清掉刚拿到的 cookie）
+        assert r.status_code == 200 and "text/html" in r.headers["content-type"]
+        assert "set-cookie" not in r.headers
+        assert appmod._BOOTSTRAP_TOKEN == "boot-test"
+        assert c.get("/auth.js").status_code == 200
+
+        # 页面脚本 POST 换 cookie；换完 token 立即作废
+        r = c.post("/auth/exchange", json={"token": "boot-test"})
+        assert r.status_code == 200 and "console_token" in r.headers["set-cookie"]
+        assert appmod._BOOTSTRAP_TOKEN is None
         c.cookies.clear()
-        assert c.get("/?token=boot-test", follow_redirects=False).status_code == 401
+        assert c.post("/auth/exchange", json={"token": "boot-test"}).status_code == 401
 
 
 # ---------------- 端口分配
