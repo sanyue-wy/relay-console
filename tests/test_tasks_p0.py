@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -14,6 +15,7 @@ import relay.app as appmod  # noqa: E402
 import relay.browser as browser_mod  # noqa: E402
 from adapters.spec import ChromeNotFound, PortNotReady, ProfileInUse  # noqa: E402
 from relay.browser import ChromeManager  # noqa: E402
+from relay.config import find_chrome, load_config  # noqa: E402
 
 
 def make_client(tmp_path, monkeypatch, **kwargs):
@@ -95,3 +97,45 @@ def test_t2_api_returns_502_with_code(tmp_path, monkeypatch, exc):
         r = c.post("/api/platforms/deepseek/open", headers=H, json={"account": "main"})
         assert r.status_code == 502
         assert r.json()["error"] == exc.code
+
+
+# ---------------- T3：自动探测 Chrome 路径
+def _make_chrome(base: Path) -> Path:
+    p = base / "Google/Chrome/Application/chrome.exe"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("", encoding="utf-8")
+    return p
+
+
+def test_t3_find_chrome_order(tmp_path, monkeypatch):
+    pf = _make_chrome(tmp_path / "pf")
+    pf86 = _make_chrome(tmp_path / "pf86")
+    local = _make_chrome(tmp_path / "local")
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "pf"))
+    monkeypatch.setenv("ProgramFiles(x86)", str(tmp_path / "pf86"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+
+    assert find_chrome() == str(pf)                 # ProgramFiles 优先
+    pf.unlink()
+    assert find_chrome() == str(pf86)               # 其次 ProgramFiles(x86)
+    pf86.unlink()
+    assert find_chrome() == str(local)              # 最后 LOCALAPPDATA
+    local.unlink()
+    assert find_chrome() is None
+
+
+def test_t3_load_config_fills_empty_chrome_path(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text(yaml.safe_dump({
+        "host": "127.0.0.1", "port": 8801, "chrome_path": "",
+        "data_dir": "./data", "profiles_dir": "./profiles",
+        "summary": {"model": "deepseek-chat"},
+    }), encoding="utf-8")
+    pf = _make_chrome(tmp_path / "pf")
+    monkeypatch.setenv("RELAY_HOME", str(home))
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "pf"))
+    monkeypatch.setenv("ProgramFiles(x86)", str(tmp_path / "nope"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "nope2"))
+    cfg = load_config()
+    assert cfg["chrome_path"] == str(pf)

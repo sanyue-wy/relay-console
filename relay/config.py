@@ -73,6 +73,27 @@ def _starter_config(home: Path) -> None:
         header + yaml.safe_dump(example, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
+def _chrome_candidates() -> list[Path]:
+    """Windows 上常见的 Chrome 安装位置，按优先级排列。"""
+    out: list[Path] = []
+    for env in ("ProgramFiles", "ProgramFiles(x86)"):
+        base = os.environ.get(env)
+        if base:
+            out.append(Path(base) / "Google/Chrome/Application/chrome.exe")
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        out.append(Path(local) / "Google/Chrome/Application/chrome.exe")
+    return out
+
+
+def find_chrome() -> str | None:
+    """返回第一个存在的 Chrome 路径；都没有则 None。"""
+    for candidate in _chrome_candidates():
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 def load_config(path: str | Path | None = None) -> Config:
     home = data_home()
     p = Path(path) if path else config_path()
@@ -85,6 +106,11 @@ def load_config(path: str | Path | None = None) -> Config:
     # 升级继承：老配置缺失的新键从模板补齐（不覆盖已有值）
     example = yaml.safe_load((ROOT / "config.example.yaml").read_text(encoding="utf-8"))
     _deep_fill(cfg, example)
+    # chrome_path 为空或不存在时自动探测；都找不到就保留原值，交给启动时报 ChromeNotFound
+    if not cfg.get("chrome_path") or not Path(str(cfg["chrome_path"])).exists():
+        detected = find_chrome()
+        if detected:
+            cfg["chrome_path"] = detected
     # 相对路径的落点：RELAY_HOME/exe 运行用数据根，源码运行保持仓库根（老用户不受影响）
     base = home if (os.environ.get("RELAY_HOME") or is_frozen()) else ROOT
     for key in ("data_dir", "profiles_dir"):
