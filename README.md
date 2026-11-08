@@ -51,7 +51,7 @@ relay-console/
     build_exe.py            打包 Windows exe（PyInstaller，分发用）
     make_shortcut.py        生成桌面/开始菜单快捷方式（免注册表）
     create_desktop_shortcut.bat  exe 接收者用的快捷方式脚本（随包分发）
-  tests/                    离线自测（无需浏览器），130 项
+  tests/                    离线自测（无需浏览器），133 项
 ```
 
 ## 安装（Windows）
@@ -62,7 +62,7 @@ pip install -r requirements.txt          # 运行依赖
 pip install -r requirements-dev.txt      # 跑测试/打包时再装（pytest、pywin32、pyinstaller）
 copy config.example.yaml config.yaml      # 改 chrome_path、Hark 地址、接力顺序、多账号
 python scripts/setup_keys.py              # 输入摘要 API key，存入 Windows 凭据管理器
-python -m pytest -q                       # 130 项自测应全部通过
+python -m pytest -q                       # 133 项自测应全部通过
 ```
 不需要 `playwright install`，程序连接你本机安装的 Chrome（或指纹浏览器提供的 CDP）。
 

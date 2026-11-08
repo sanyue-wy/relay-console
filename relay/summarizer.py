@@ -179,7 +179,8 @@ class Summarizer:
         """
         s = self.main.get_session(sid)
         rounds = self.cfg.get("recent_rounds_raw", 3) if recent_rounds is None else max(0, int(recent_rounds))
-        recent = self.main.messages(sid, limit=rounds * 2)
+        # rounds=0 表示不附带原文：messages(limit=0) 的 0 会被当作"不限"，显式给空列表
+        recent = [] if rounds == 0 else self.main.messages(sid, limit=rounds * 2)
         # Ghost messages：最近几轮以引用块回放，让新会话“看起来没有中断”
         ghost = "\n\n".join(
             f"> **{'用户' if m['role'] == 'user' else 'AI（' + (m.get('platform') or '') + '）'}**："

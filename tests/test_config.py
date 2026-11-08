@@ -39,6 +39,7 @@ def test_frozen_first_run_bootstrap(tmp_path, monkeypatch):
     assert (home / "config.yaml").exists()
     assert cfg["data_dir"] == str(home / "data") and cfg["profiles_dir"] == str(home / "profiles")
     assert cfg["platforms"]["deepseek"]["port"] == 9301
-    # 配置里不落任何密钥/凭据；数据目录与程序分离
+    # 配置里不落任何密钥/凭据（api_key 已移入系统凭据库，模板中不再有该字段）
     text = (home / "config.yaml").read_text(encoding="utf-8")
-    assert "api_key: \"\"" in text.replace("'", "\"")
+    assert "api_key" not in text
+    assert cfg["platforms"]["deepseek"].get("enabled") is True     # enabled 键随模板补齐
