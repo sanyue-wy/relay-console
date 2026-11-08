@@ -114,3 +114,34 @@
 - **官方 API 适配器**：审查建议给 DeepSeek/Kimi/Gemini 写官方 API 参与者。这是新功能
   方向（`Participant` 规格已支持），不属于本轮缺陷修复；需要 API key 与计费决策，
   单独立项。
+
+## 五、V1.1 功能集（2026-11-08，基线 e066b59 → 1.1.1）
+
+### A. 手动「总结并切换」✅
+- **A1 摘要提供者可配置、可热更新**：`summary.provider`（deepseek/moonshot/dashscope/openai/custom）
+  + 预设填默认值；`POST/GET /api/settings/summary` 与 `/test`（≤8 token 极短请求，401/404/超时
+  译成中文）；`Summarizer.reconfigure` 热重建客户端；密钥只进凭据库，GET 永不回传。
+- **A2 摘要预览与编辑**：`summary/refresh`（API 失败回退缓存不 500）、`PUT summary`（8000 字上限，
+  审计只记长度）、`handoff/preview`（与 handoff_package 共用拼装，预判 inline/upload_md/trimmed）。
+- **A3 手动切换引擎**：`manual_handoff` 与自动接力共用 `_locked_turn`；发送成功才 switch_platform，
+  失败回滚；源账号不冷却、目标冷却只提示；与 ask 每会话互斥（409）；`POST /api/sessions/{sid}/handoff`。
+- **A4 开始页界面**：会话头部「🔁 总结并切换」三步弹窗（生成/编辑 → 选目标 → 预览确认），
+  成功后插入灰色切换提示。
+
+### B. 网页平台与指纹浏览器可视化配置 ✅
+- **B1 校验层** `relay/config_schema.py`：pydantic 模型（端口 1024-65535、url 必须 https、
+  账号名与 Agent 同字符集、backend 三选一、指纹环境不可重复分配），400 + 字段级中文错误；
+  全局端口冲突检测单点化（ChromeManager 复用）。
+- **B2 平台卡片**：`GET /api/platforms/{pid}/status`（不启动浏览器）、`POST .../probe`（选择器
+  计数，脚本与接口共用 relay/probe.py）、`PUT /api/platforms/{pid}`（enabled/url/port/accounts，
+  改端口或 url 且浏览器开着 → needs_restart）；enabled=false 不参与接力/下拉/新建会话；
+  设置页 Chrome 路径自动检测 + 校验。
+- **B3 指纹浏览器连接向导**：`fingerprint.api_key` 迁入系统凭据库（启动自动迁移+审计+置空，
+  env 优先）；`GET/POST test/PUT /api/settings/fingerprint`；设置页「🧭 浏览器承载」卡片
+  （后端单选 + 开启说明 + 测试读环境 + 平台:账号→环境映射表）；不热切换 ChromeManager。
+- **B4 新手引导**：`GET /api/setup/status`（四步完成度，只读、不启动浏览器、统计不逐个探测
+  本地 API）；开始页引导条，每步可点击跳转高亮，可关闭（localStorage）。
+
+### V1.1 明确不做（与 V1.0 取舍一致）
+- 不新增任何反检测、指纹伪装、账号轮换、自动代填能力；指纹部分仅把现有配置项可视化。
+- `/agent/*` 与 MCP 不新增能力：Agent 不能触发切换，会话状态视图仍不含 url/port 等配置。

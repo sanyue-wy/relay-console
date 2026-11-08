@@ -5,11 +5,14 @@
 - **多平台接力**：驱动 DeepSeek / 豆包 / Kimi / Gemini / Hark 五个网页版；当前平台触发上限时，用滚动摘要自动接力并把刚才那一问重发过去
 - **平台 + 账号两级轮换**：每个平台可登记多个账号（独立 profile / 独立指纹环境 / 独立冷却），接力先在同平台换账号，再跨平台
 - **无缝衔接**：结构化交接摘要（目标约束 / 已确认事实 / 进度 / 待决问题）+ 最近几轮引用块回放（ghost messages），API 不可用时用缓存摘要照常交接
+- **手动切换（V1.1）**：开始页「🔁 总结并切换」三步弹窗——生成/编辑摘要、选目标（看登录/冷却状态）、确认字数与投递方式后一键切换
+- **摘要提供者可配置（V1.1）**：DeepSeek / Moonshot / 百炼 / OpenAI / 自定义（OpenAI 兼容，Ollama 走本机 http 地址）；设置页更换即热更新，密钥只存系统凭据库
+- **可视化配置（V1.1）**：平台卡片（启停 / URL / 端口 / 账号 / 状态徽标 / 选择器探测）、浏览器承载向导（Chrome / AdsPower / ovoBrowser + 环境映射表）、新手引导条
 - **对抗模式**：网页 vs 网页、网页 vs Agent、Agent vs Agent
 - **双池与授权**：主池（私有）与 Agent 读取池（对抗池）两个文件、两把密钥；会话池与读取池一一对应；Agent 每次读取都要你在控制台批准
 - **MCP 接入**：Agent 只能碰读取池，票据一次性、全程审计
-- **指纹承载**：自建 Chrome 或外部指纹浏览器（AdsPower / ovoBrowser），每个平台账号一个环境
-- **四页控制台**：开始（会话）/ Agent 池 / 账户 / 设置，modern-gradient 风格
+- **指纹承载**：自建 Chrome 或外部指纹浏览器（AdsPower / ovoBrowser），每个平台账号一个环境；本地 API 密钥只存系统凭据库
+- **四页控制台**：开始（会话）/ Agent 池 / 平台与账号 / 设置，modern-gradient 风格
 
 ## 目录
 ```
@@ -19,13 +22,15 @@ relay-console/
   config.example.yaml       配置模板（复制为 config.yaml）
   relay/                    控制台后端
     app.py                  FastAPI：/api/*（你）  /agent/*（Agent）
-    relay_engine.py         接力引擎 + 可替换路由策略 RelayPolicy
-    summarizer.py           滚动摘要 + 交接包（ghost messages）
+    relay_engine.py         接力引擎 + 可替换路由策略 RelayPolicy（含手动切换 manual_handoff）
+    summarizer.py           滚动摘要 + 交接包（ghost messages）+ 提供者预设与连通性测试
     arena.py                对抗模式
     storage.py              主池 main.db / 读取池 arena.db / 授权 / 审计
     browser.py              浏览器承载：自建 Chrome 或指纹浏览器（CDP）
     fingerprint.py          指纹浏览器本地 API（AdsPower / ovoBrowser）
-    crypto.py               密钥与凭据（系统凭据库）
+    probe.py                选择器探测（脚本与接口共用）
+    config_schema.py        配置校验层（pydantic，字段级中文错误）
+    crypto.py               密钥与凭据（系统凭据库：主池/读取池/摘要 API/指纹 API）
     config.py               配置加载 / 平台账号表 / 写回 config.yaml
     static/index.html       控制台界面（四页 SPA）
     static/app.js           前端逻辑（外置脚本，CSP script-src 'self'）
@@ -46,7 +51,7 @@ relay-console/
     build_exe.py            打包 Windows exe（PyInstaller，分发用）
     make_shortcut.py        生成桌面/开始菜单快捷方式（免注册表）
     create_desktop_shortcut.bat  exe 接收者用的快捷方式脚本（随包分发）
-  tests/                    离线自测（无需浏览器），68 项
+  tests/                    离线自测（无需浏览器），130 项
 ```
 
 ## 安装（Windows）
@@ -57,7 +62,7 @@ pip install -r requirements.txt          # 运行依赖
 pip install -r requirements-dev.txt      # 跑测试/打包时再装（pytest、pywin32、pyinstaller）
 copy config.example.yaml config.yaml      # 改 chrome_path、Hark 地址、接力顺序、多账号
 python scripts/setup_keys.py              # 输入摘要 API key，存入 Windows 凭据管理器
-python -m pytest -q                       # 68 项自测应全部通过
+python -m pytest -q                       # 130 项自测应全部通过
 ```
 不需要 `playwright install`，程序连接你本机安装的 Chrome（或指纹浏览器提供的 CDP）。
 
@@ -82,12 +87,35 @@ python -m pytest -q                       # 68 项自测应全部通过
 
 > selectors.yaml 里的选择器是起步值，网页经常改版，以 probe 结果为准。
 
+## V1.1 新功能
+- **手动「总结并切换」**：开始页会话头部「🔁 总结并切换」→ 三步弹窗（生成/编辑摘要 →
+  选目标 → 预览确认）。可附带最近几轮原文与一个可选的下一问；不带问题时由目标平台
+  回一句确认。发送成功才切换（失败保持原平台并回滚已入库消息）；手动切换**不给源账号
+  加冷却**，目标账号冷却中不阻止、只提示；同一会话与问答互斥，并发返回 409。
+- **摘要提供者可配置、可热更新**：`summary.provider` 支持 deepseek / moonshot / dashscope /
+  openai / custom（OpenAI 兼容）；预设只填默认值，base_url/model 仍可改。设置页保存即热更新
+  无需重启；「测试连接」发 ≤8 token 的极短请求，错误翻译成中文（401 密钥无效、404 模型或
+  地址错误、超时网络问题）。base_url 只允许 https（本机 127.0.0.1 / localhost 的 http 例外，
+  供 Ollama 等本地模型）。摘要只调用这里配置的 API，不占网页版额度；对话内容会发送给该提供者。
+- **可视化配置**：平台卡片（启用开关、自定义 url、端口、账号状态徽标、选择器探测），
+  所有新配置接口先过 `relay/config_schema.py` 校验层（400 + 字段级中文错误）；浏览器承载
+  向导把 AdsPower / ovoBrowser 的环境映射做成界面（密钥只进凭据库，老配置明文密钥启动时
+  自动迁移并清空）；顶部新手引导条覆盖「承载 → 登录 → 摘要 API → 完成」四步。
+
 ## 控制台界面
 modern-gradient 风格（stylekit），单文件 SPA 四页切换：
-- **开始**：只负责会话——新建、列表、问答（Ctrl+Enter 发送），接力提示内联显示在对话里。
+- **开始**：只负责会话——新建、列表、问答（Ctrl+Enter 发送）；会话头部「🔁 总结并切换」打开
+  三步弹窗（生成/编辑摘要 → 选目标看状态 → 预览字数与投递方式后切换）；顶部新手引导条
+  （浏览器承载 → 登录平台 → 摘要 API（可跳过）→ 完成），每步可点击跳转，可关闭（存 localStorage）。
 - **Agent 池**：授权请求（3 秒自动刷新）、发布到读取池、池条目（显示源会话）、Agent 令牌、对抗对局、审计。
-- **账户**：平台多账号池登记——增删账号、autofill 开关、打开/登录、平台历史会话一键接入。
-- **设置**：接力顺序 / 冷却分钟 / 截断接力 / 预生成阈值 / 摘要轮数 / 对抗参数，保存即生效并写回 `config.yaml`（整体落盘，yaml 注释不保留）。
+- **平台与账号**：每平台一张卡片——启用开关（停用后不参与接力）、自定义 url、基础端口、
+  账号增删（删除需确认）；每个账号一行，状态徽标（未启动 / 已打开未登录 / 已登录 / 冷却到 hh:mm），
+  配「打开并登录 / 检测登录 / 检测选择器」三个按钮；autofill 开关、平台历史会话一键接入。
+- **设置**：接力顺序 / 冷却分钟 / 截断接力 / 预生成阈值 / 摘要轮数 / 对抗参数；Chrome 路径
+  （自动检测 + 校验）；「🧠 摘要模型（第三方 API）」卡片（提供者下拉 + 预设填默认值 +
+  测试连接 + 清除密钥，热更新无需重启）；「🧭 浏览器承载」卡片（Chrome / AdsPower / ovoBrowser
+  单选 + 各自开启说明 + 测试并读取环境 + 平台:账号 → 环境映射表）；保存即生效并写回
+  `config.yaml`（整体落盘，yaml 注释不保留）。
 
 ## 接力怎么工作
 - 每 4 轮（可配）用 API 增量更新一次本会话摘要，加密存主池；未摘要部分超过 `near_threshold_chars` 时也会提前生成（网页看不到额度百分比，以此近似"额度将尽前预生成摘要"的思路）。
@@ -109,21 +137,13 @@ modern-gradient 风格（stylekit），单文件 SPA 四页切换：
 - 接力换账号时，换的是另一个指纹环境；`close()` 只断开 CDP，不关你的浏览器。
 
 配置步骤：
-1. 启动客户端并在设置里开启**本地 API**（AdsPower 还需在 设置 → API 生成 api-key；可填 `fingerprint.api_key`，或用环境变量 `ADSPOWER_API_KEY`）。
+1. 启动客户端并在设置里开启**本地 API**（AdsPower 还需在 设置 → API 生成 api-key；
+   可在控制台设置页「🧭 浏览器承载」卡片只写保存——密钥只进系统凭据库；环境变量 `ADSPOWER_API_KEY` 仍然优先）。
 2. 在客户端里为每个平台账号建一个环境，**在该环境内手动登录一次**。
-3. 列出环境 ID：
-   ```powershell
-   python scripts/fingerprint_profiles.py --backend ovobrowser
-   # AdsPower: python scripts/fingerprint_profiles.py --backend adspower
-   ```
-4. 写进 `config.yaml`：
-   ```yaml
-   fingerprint:
-     backend: ovobrowser          # 或 adspower
-     profiles:
-       deepseek: {main: "<环境ID>", alt: "<环境ID>"}
-       kimi:     {main: "<环境ID>"}
-   ```
+3. 控制台设置页「🧭 浏览器承载」卡片 → 选后端 → 填 api_base（留空用默认）→ **测试并读取环境** →
+   在映射表里把每个「平台:账号」选到对应环境 → 保存（同一环境分给两个账号会报错）。
+   命令行方式仍可用：`python scripts/fingerprint_profiles.py --backend ovobrowser` 列出环境 ID 后手填 config.yaml。
+4. 保存后用托盘「重启控制台」生效（backend 或密钥变化时接口会返回 needs_restart 提示）。
    每个启用的平台账号都必须有环境 ID；缺失会直接报错并指出要补的键，不会静默退回 Chrome。
 
 实测（ovoBrowser 0.5.4 + 临时环境）：CDP 接管后 `navigator.webdriver === false`，UA/时区/语言/核心数均来自环境。
