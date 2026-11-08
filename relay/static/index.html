@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
 <title>Relay Console</title>
 <style>
   /* Modern Gradient tokens（stylekit.top/zh/styles/modern-gradient） */
@@ -120,10 +121,10 @@
 
 <nav id="nav">
   <span class="logo">Relay Console</span>
-  <button class="tab on" data-page="start" onclick="show('start')">开始</button>
-  <button class="tab" data-page="pool" onclick="show('pool')">Agent 池</button>
-  <button class="tab" data-page="accounts" onclick="show('accounts')">账户</button>
-  <button class="tab" data-page="settings" onclick="show('settings')">设置</button>
+  <button class="tab on" data-page="start" data-act="nav" data-nav="start">开始</button>
+  <button class="tab" data-page="pool" data-act="nav" data-nav="pool">Agent 池</button>
+  <button class="tab" data-page="accounts" data-act="nav" data-nav="accounts">账户</button>
+  <button class="tab" data-page="settings" data-act="nav" data-nav="settings">设置</button>
   <span class="spacer"></span>
   <span class="conn" id="connInfo"></span>
 </nav>
@@ -135,7 +136,7 @@
         <h3>💬 新建会话</h3>
         <input id="newTitle" placeholder="会话标题">
         <select id="newPlatform" style="margin-top:6px"></select>
-        <button class="btn" style="width:100%;margin-top:8px" onclick="newSession()">新建</button>
+        <button class="btn" style="width:100%;margin-top:8px" data-act="newSession">新建</button>
       </div>
       <div class="card">
         <h3>🗂 会话</h3><div id="sessions"></div>
@@ -146,7 +147,7 @@
       <div id="chat"></div>
       <div id="composer">
         <textarea id="q" rows="3" placeholder="输入问题，Ctrl + Enter 发送"></textarea>
-        <div class="row"><button class="btn" onclick="ask()">发送</button><span class="hint">接力与发布在 Agent 池页查看</span></div>
+        <div class="row"><button class="btn" data-act="ask">发送</button><span class="hint">接力与发布在 Agent 池页查看</span></div>
       </div>
     </div>
   </div>
@@ -175,7 +176,7 @@
         <textarea id="pubText" rows="3" placeholder="自定义文本（选“自定义文本”时使用，可脱敏）" style="margin-top:6px"></textarea>
         <div class="row" style="margin-top:8px">
           <input id="pubAudience" placeholder="可见范围 * 或 agent:名,agent:名" style="flex:1">
-          <button class="btn" onclick="publish()">发布 / 更新</button>
+          <button class="btn" data-act="publish">发布 / 更新</button>
         </div>
       </div>
     </div>
@@ -186,7 +187,7 @@
       <div class="card">
         <h3>🤖 Agent</h3>
         <div class="row"><input id="agentName" placeholder="Agent 名称" style="flex:1">
-          <button class="btn small" onclick="newAgent()">新建令牌</button></div>
+          <button class="btn small" data-act="newAgent">新建令牌</button></div>
         <div id="agents" style="margin-top:6px"></div>
       </div>
     </div>
@@ -204,12 +205,12 @@
     <div class="row" style="margin-top:6px">
       <input id="seatA" placeholder="A 方：deepseek 或 agent:名称" style="flex:1">
       <input id="seatB" placeholder="B 方：kimi 或 agent:名称" style="flex:1">
-      <button class="btn" onclick="newArena()">创建对局</button>
+      <button class="btn" data-act="newArena">创建对局</button>
     </div>
     <div id="arenas" style="margin-top:8px"></div>
   </div>
   <div class="card">
-    <h3>📜 审计</h3><button class="ghost small" onclick="showAudit()">查看最近记录</button>
+    <h3>📜 审计</h3><button class="ghost small" data-act="showAudit">查看最近记录</button>
     <pre id="audit"></pre>
   </div>
 </div>
@@ -243,198 +244,13 @@
       <div class="card">
         <h3>ℹ️ 运行信息</h3>
         <div class="sub" id="setInfo"></div>
-        <button class="btn" style="margin-top:10px" onclick="saveSettings()">保存设置</button>
+        <button class="btn" style="margin-top:10px" data-act="saveSettings">保存设置</button>
         <div class="hint">保存立即生效并写回 config.yaml（注释不保留）；凭据与密钥只存系统凭据库，不在此页</div>
       </div>
     </div>
   </div>
 </div>
 
-<script>
-let cur=null, platforms=[];
-const $=id=>document.getElementById(id);
-const api=(p,o={})=>fetch(p,{headers:{'Content-Type':'application/json'},...o}).then(async r=>{const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.detail||j.error||r.status);return j});
-const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-
-/* ---------------- 页面切换 ---------------- */
-const PAGES=['start','pool','accounts','settings'];
-async function show(p){
-  PAGES.forEach(x=>$('page-'+x).classList.toggle('on',x===p));
-  document.querySelectorAll('#nav .tab').forEach(b=>b.classList.toggle('on',b.dataset.page===p));
-  try{
-    if(p==='start'){await Promise.all([loadPlatformsLite(),loadSessionsData()]);renderSessions();if(cur)await openS(cur,true);}
-    if(p==='pool'){await loadPoolPage();}
-    if(p==='accounts'){await loadAccounts();}
-    if(p==='settings'){await loadSettings();}
-  }catch(e){alert(e.message)}
-}
-
-/* ---------------- 开始页：会话 ---------------- */
-async function loadPlatformsLite(){
-  const d=await api('/api/platforms'); platforms=d.platforms.map(p=>p.id);
-  $('newPlatform').innerHTML=platforms.map(p=>`<option>${p}</option>`).join('');
-}
-async function loadSessionsData(){cache.sessions=await api('/api/sessions');return cache.sessions}
-function renderSessions(){
-  $('sessions').innerHTML=cache.sessions.map(x=>`<div class="item ${x.id===cur?'on':''}" onclick="openS('${x.id}')"><span class="t">${esc(x.title)}</span><div class="sub">${x.chain.join(' → ')}</div></div>`).join('')||'<span class="empty">还没有会话</span>';
-}
-async function newSession(){
-  const r=await api('/api/sessions',{method:'POST',body:JSON.stringify({title:$('newTitle').value||'新会话',platform:$('newPlatform').value})});
-  cur=r.id; await loadSessionsData(); renderSessions(); openS(cur);
-}
-async function openS(id,silent){
-  cur=id; const s=await api('/api/sessions/'+id);
-  $('head').innerHTML=`<div class="t">${esc(s.title)}</div><div class="sub">当前 ${s.platform}:${s.account||'main'} · 接力链 ${s.chain.join(' → ')}${s.pool_item_id?' · 已发布读取池':''}</div>`;
-  $('chat').innerHTML=s.messages.map(m=>`<div class="msg ${m.role}"><div class="who">${m.role==='user'?'你':m.platform}</div>${esc(m.content)}</div>`).join('');
-  $('chat').scrollTop=$('chat').scrollHeight; renderSessions();
-}
-async function ask(){
-  if(!cur)return alert('先选会话'); const t=$('q').value.trim(); if(!t)return; $('q').value='';
-  $('chat').innerHTML+=`<div class="msg user">${esc(t)}</div><div class="empty" id="wait">等待回复…</div>`;
-  $('chat').scrollTop=$('chat').scrollHeight;
-  try{const r=await api(`/api/sessions/${cur}/ask`,{method:'POST',body:JSON.stringify({text:t})});
-    r.relays.forEach(x=>$('chat').innerHTML+=`<div class="relay">已接力：${x.from} → ${x.to}（${esc(x.reason)}）</div>`);
-  }catch(e){alert(e.message)} openS(cur);
-}
-$('q').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.ctrlKey)ask()});
-
-/* ---------------- Agent 池页 ---------------- */
-async function loadPoolPage(){
-  await loadSessionsData();
-  $('pubSession').innerHTML='<option value="">（不关联会话）</option>'+cache.sessions.map(x=>`<option value="${x.id}">${esc(x.title)}</option>`).join('');
-  await Promise.all([loadApprovals(),loadItems(),loadAgents(),loadArenas()]);
-}
-async function loadApprovals(){
-  const d=await api('/api/approvals');
-  $('apCount').textContent=d.pending.length;
-  const what=r=>r.scope_type==='items'?'条目：'+esc((r.titles||[]).join('、'))
-    :r.scope_type==='turn'?'对局 '+r.scope.arena_id+' 的本轮题目'
-    :'会话 '+r.scope.session_id+' 的状态/摘要预览';
-  $('approvals').innerHTML=d.pending.map(r=>`<div class="item" style="border:1px solid rgba(245,158,11,.35);background:rgba(245,158,11,.08)"><div class="t">${esc(r.participant_id)} 申请读取</div><div class="sub">${what(r)} · 理由：${esc(r.reason)}</div><div class="row" style="margin-top:6px"><button class="btn small" onclick="decide('${r.id}','approve')">批准一次</button>${d.allow_batch&&r.scope_type==='turn'?`<button class="ghost small" onclick="approveRound('${r.scope.arena_id}')">本轮全部批准</button>`:''}<button class="ghost small danger" onclick="decide('${r.id}','deny')">拒绝</button></div></div>`).join('')||'<span class="empty">暂无</span>';
-}
-async function decide(id,d){await api(`/api/approvals/${id}/${d}`,{method:'POST'});loadApprovals()}
-async function approveRound(aid){try{await api(`/api/arenas/${aid}/approve-round`,{method:'POST'})}catch(e){alert(e.message)}loadApprovals()}
-async function loadItems(){
-  const [its,ses]=await Promise.all([api('/api/pool/items'),api('/api/sessions')]);
-  const st={}; ses.forEach(x=>st[x.id]=x.title);
-  $('items').innerHTML=its.map(i=>`<div class="item" style="cursor:default"><div class="row spread"><span class="t">${esc(i.title)}</span><button class="ghost small danger" onclick="delItem('${i.id}')">删除</button></div><div class="sub">${i.id}${i.session_id?' · 源会话：'+esc(st[i.session_id]||i.session_id):' · 独立条目'} · ${esc(i.audience)}</div></div>`).join('')||'<span class="empty">空</span>';
-}
-async function delItem(id){await api('/api/pool/items/'+id,{method:'DELETE'});loadItems()}
-async function publish(){
-  const sid=$('pubSession').value, mode=$('pubMode').value;
-  const title=$('pubTitle').value||(cache.sessions.find(x=>x.id===sid)||{}).title||'发布条目';
-  const body={title,session_id:sid||null,mode,text:$('pubText').value||null,audience:$('pubAudience').value||'*'};
-  try{const r=await api('/api/pool/publish',{method:'POST',body:JSON.stringify(body)});
-    alert(r.linked?'已更新该会话对应的读取池条目（1:1）':'已发布独立条目');
-    $('pubText').value=''; loadItems();
-  }catch(e){alert(e.message)}
-}
-async function loadAgents(){
-  const a=await api('/api/agents');
-  $('agents').innerHTML=a.map(x=>`<div class="item" style="cursor:default"><div class="row spread"><span class="t">${esc(x.participant_id)}</span>${x.revoked?'<span class="pill gray">已吊销</span>':`<button class="ghost small danger" onclick="revoke('${x.participant_id}')">吊销</button>`}</div></div>`).join('')||'<span class="empty">还没有 Agent</span>';
-}
-async function newAgent(){
-  const r=await api('/api/agents',{method:'POST',body:JSON.stringify({name:$('agentName').value})});
-  prompt('令牌只显示一次，复制到该 Agent 的 MCP 配置 RELAY_AGENT_TOKEN：',r.token); loadAgents();
-}
-async function revoke(pid){await api(`/api/agents/${encodeURIComponent(pid)}/revoke`,{method:'POST'});loadAgents()}
-function seat(v,side){v=v.trim();return v.startsWith('agent:')?{side,kind:'agent',participant_id:v}:{side,kind:'web',platform:v}}
-async function newArena(){
-  await api('/api/arenas',{method:'POST',body:JSON.stringify({mode:$('mode').value,topic:$('topic').value,seats:[seat($('seatA').value,'正方'),seat($('seatB').value,'反方')]})}); loadArenas();
-}
-async function loadArenas(){
-  const a=await api('/api/arenas');
-  $('arenas').innerHTML=a.map(x=>`<div class="item" style="cursor:default"><div class="row spread"><span class="t">${esc(x.topic)}</span><span class="pill violet">${x.mode}</span></div><div class="row" style="margin-top:5px"><button class="ghost small" onclick="round('${x.id}')">下一轮</button><button class="ghost small" onclick="viewArena('${x.id}')">查看</button></div><div id="ar_${x.id}"></div></div>`).join('')||'<span class="empty">还没有对局</span>';
-}
-async function round(id){try{await api(`/api/arenas/${id}/round`,{method:'POST'})}catch(e){alert(e.message)} viewArena(id)}
-async function viewArena(id){
-  const d=await api('/api/arenas/'+id);
-  $('ar_'+id).innerHTML=`<div class="sub">状态：${esc(d.round_status)}</div>`+d.turns.map(t=>`<div class="msg assistant"><div class="who">第${t.round}轮 · ${t.side}</div>${esc(t.content)}</div>`).join('');
-}
-async function showAudit(){const a=await api('/api/audit');$('audit').textContent=a.map(x=>`${new Date(x.ts*1000).toLocaleString()} ${x.actor} ${x.action} ${x.detail}`).join('\n')}
-
-/* ---------------- 账户页 ---------------- */
-async function loadAccounts(){
-  const d=await api('/api/platforms');
-  $('accList').innerHTML=d.platforms.map(p=>`
-    <div class="card">
-      <h3>🌐 ${p.id}
-        <span class="spacer" style="flex:1"></span>
-        <label class="ck" style="margin:0" title="开启后打开平台未登录时用凭据库代填（凭据用 scripts/add_credential.py 录入）">
-          <input type="checkbox" ${p.autofill?'checked':''} onchange="toggleAutofill('${p.id}',this.checked)"> autofill
-        </label>
-      </h3>
-      ${(p.accounts||[]).map(a=>`<div class="item" style="cursor:default"><div class="row spread">
-          <span><span class="pill ${a.cooldown_until?'amber':'cyan'}">${esc(a.account)}</span>${a.cooldown_until?' <span class="sub">冷却至 '+a.cooldown_until.slice(11,16)+'</span>':''}</span>
-          <span class="row">
-            <button class="ghost small" onclick="openP('${p.id}','${esc(a.account)}')">打开 / 登录</button>
-            <button class="ghost small danger" onclick="delAccount('${p.id}','${esc(a.account)}')">移除</button>
-          </span></div></div>`).join('')}
-      <div class="row" style="margin-top:8px">
-        <input id="acc_${p.id}" placeholder="新账号名" style="flex:1">
-        <button class="btn small" onclick="addAccount('${p.id}')">登记账号</button>
-        <button class="ghost small" onclick="showChats('${p.id}')">平台历史会话</button>
-      </div>
-      <div id="chats_${p.id}"></div>
-    </div>`).join('');
-}
-async function saveAccounts(pid,accounts){return api(`/api/platforms/${pid}/accounts`,{method:'POST',body:JSON.stringify({accounts})})}
-async function addAccount(pid){
-  const v=$('acc_'+pid).value.trim(); if(!v)return;
-  const cur2=(await api(`/api/platforms/${pid}/accounts`)).accounts;
-  await saveAccounts(pid,[...new Set([...cur2,v])]);
-  $('acc_'+pid).value=''; loadAccounts();
-}
-async function delAccount(pid,name){
-  const cur2=(await api(`/api/platforms/${pid}/accounts`)).accounts;
-  const next=cur2.filter(x=>x!==name);
-  if(!next.length)return alert('至少保留一个账号');
-  await saveAccounts(pid,next); loadAccounts();
-}
-async function toggleAutofill(pid,on){await api(`/api/platforms/${pid}/accounts`,{method:'POST',body:JSON.stringify({autofill:on})})}
-async function openP(pid,account){try{await api(`/api/platforms/${pid}/open`,{method:'POST',body:JSON.stringify({account,autofill:true})})}catch(e){alert(e.message)}}
-async function showChats(pid){
-  const box=$('chats_'+pid);
-  const d=await api(`/api/platforms/${pid}/chats`).catch(e=>{alert(e.message);return{chats:[]}});
-  box.innerHTML=d.chats.map(c=>`<div class="item" onclick="resumeChat('${pid}','${encodeURIComponent(c.url||'')}','${esc(c.title).replace(/'/g,'')}')"><span class="t">${esc(c.title)}</span></div>`).join('')||'<span class="empty">未读到（probe 修正 chat_list_item）</span>';
-}
-async function resumeChat(pid,url,title){
-  const r=await api('/api/sessions/resume',{method:'POST',body:JSON.stringify({platform:pid,url:decodeURIComponent(url),title})});
-  cur=r.id; await loadSessionsData(); show('start'); openS(cur);
-}
-
-/* ---------------- 设置页 ---------------- */
-async function loadSettings(){
-  const s=await api('/api/settings');
-  $('setOrder').value=(s.relay_order||[]).join(', ');
-  $('setCooldown').value=s.default_cooldown_minutes;
-  $('setNear').value=s.near_threshold_chars;
-  $('setTrunc').checked=!!s.relay_on_truncation;
-  $('setTurns').value=s.every_n_turns;
-  $('setRecent').value=s.recent_rounds_raw;
-  $('setArenaTimeout').value=s.agent_turn_timeout;
-  $('setBatch').checked=!!s.allow_batch_approve;
-  $('setInfo').innerHTML=`监听 <b>${esc(s.host)}:${s.port}</b> · 数据目录 <b>${esc(s.data_dir)}</b><br>提示：host/port/浏览器承载在 config.yaml 修改后重启生效`;
-}
-async function saveSettings(){
-  const body={
-    relay_order:$('setOrder').value.split(',').map(x=>x.trim()).filter(Boolean),
-    default_cooldown_minutes:+$('setCooldown').value,
-    relay_on_truncation:$('setTrunc').checked,
-    near_threshold_chars:+$('setNear').value,
-    every_n_turns:+$('setTurns').value,
-    recent_rounds_raw:+$('setRecent').value,
-    agent_turn_timeout:+$('setArenaTimeout').value,
-    allow_batch_approve:$('setBatch').checked,
-  };
-  try{await api('/api/settings',{method:'POST',body:JSON.stringify(body)});alert('已保存并写入 config.yaml')}
-  catch(e){alert(e.message)}
-}
-
-/* ---------------- 启动 ---------------- */
-show('start');
-fetch('/api/platforms').then(r=>r.json()).then(()=>{$('connInfo').textContent='已连接'}).catch(()=>{$('connInfo').textContent='控制台未连接'});
-setInterval(()=>{if($('page-pool').classList.contains('on'))loadApprovals()},3000);
-</script>
+<script src="/app.js" defer></script>
 </body>
 </html>

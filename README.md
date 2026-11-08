@@ -28,6 +28,7 @@ relay-console/
     crypto.py               密钥与凭据（系统凭据库）
     config.py               配置加载 / 平台账号表 / 写回 config.yaml
     static/index.html       控制台界面（四页 SPA）
+    static/app.js           前端逻辑（外置脚本，CSP script-src 'self'）
   adapters/
     spec.py                 适配器规格 v1.0（扩展从这里开始读）
     web_generic.py          通用网页适配器（选择器驱动 + 会话发现 + 登录代填）
@@ -45,17 +46,18 @@ relay-console/
     build_exe.py            打包 Windows exe（PyInstaller，分发用）
     make_shortcut.py        生成桌面/开始菜单快捷方式（免注册表）
     create_desktop_shortcut.bat  exe 接收者用的快捷方式脚本（随包分发）
-  tests/                    离线自测（无需浏览器），35 项
+  tests/                    离线自测（无需浏览器），48 项
 ```
 
 ## 安装（Windows）
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt          # 运行依赖
+pip install -r requirements-dev.txt      # 跑测试/打包时再装（pytest、pywin32、pyinstaller）
 copy config.example.yaml config.yaml      # 改 chrome_path、Hark 地址、接力顺序、多账号
 python scripts/setup_keys.py              # 输入摘要 API key，存入 Windows 凭据管理器
-python -m pytest -q                       # 35 项自测应全部通过
+python -m pytest -q                       # 48 项自测应全部通过
 ```
 不需要 `playwright install`，程序连接你本机安装的 Chrome（或指纹浏览器提供的 CDP）。
 
@@ -154,7 +156,7 @@ Agent 侧工具一览（详细规则见 [mcp_server/AGENT_README.md](mcp_server/
 | `list_pool()` | 可见条目 ID 与标题，不含内容 | 免授权 |
 | `request_read(item_ids, reason)` | 申请读取池条目 | 逐次批准 |
 | `get_turn(arena_id, reason)` | 申请读取对局本轮题目 | 逐次批准 |
-| `get_session_status(session_id, reason)` | 会话接力链 / 各平台账号冷却 / 摘要预览（不含对话正文） | 逐次批准 |
+| `get_session_status(session_id, reason)` | 会话接力链 / 各平台账号冷却 / 摘要预览（摘要由正文生成，仅前 600 字；不含原始消息） | 逐次批准 |
 | `check_request(request_id)` | 查询申请状态 | — |
 | `fetch_approved(request_id)` | 取回已批准内容（一次性票据，5 分钟有效） | — |
 | `submit_turn(arena_id, content)` | 提交本轮发言 | 须先读到题目 |
@@ -163,6 +165,8 @@ Agent 侧工具一览（详细规则见 [mcp_server/AGENT_README.md](mcp_server/
 - 平台密码默认不保存，只用你手动登录后留下的 profile。**例外**：仅当你在 `add_credential` 里主动存入并开启 `autofill` 时，控制台会用凭据库代填登录表单；凭据仍不出本机凭据库、不进任何日志或 MCP 通道。
 - 主池、读取池正文 AES 加密（Fernet），两把密钥存 Windows 凭据管理器。
 - 控制台只监听 127.0.0.1；`/api/*` 需要启动时生成的控制台令牌，Agent 令牌无法访问。
+- 控制台令牌分两级：启动地址里的 bootstrap token 用过一次就作废，只用于换 HttpOnly cookie；页面脚本全部外置，响应带 `script-src 'self'` CSP，且 `TrustedHostMiddleware` 只接受本机 Host（防 DNS rebinding）。
+- 授权按“批准时的内容版本”生效：条目在批准后被再次发布（内容变化），票据会拒绝返回（`CONTENT_CHANGED`），不会把没审过的新内容交给 Agent。
 - MCP 进程不读任何本地文件，只调用 `/agent/*`，且只允许连本机回环地址（防 SSRF）；每次读取需新批准，票据一次性、5 分钟过期；每分钟最多 10 次申请；全部写审计。
 - **硬隔离（强烈建议）**：如果 Agent 能执行 shell，它在同一 Windows 用户下能读到你的任何文件和凭据库。
   请新建一个 Windows 本地用户（如 `relay`），用它运行控制台和平台浏览器；

@@ -40,8 +40,12 @@ class GenericWebAdapter(WebAdapter):
             return False
 
     def _on_response(self, resp) -> None:
-        if resp.status in self.sel.limit_status_codes and \
-                urlparse(resp.url).netloc.endswith(urlparse(self.sel.url).netloc.split(":")[0].removeprefix("www.")):
+        if resp.status not in self.sel.limit_status_codes:
+            return
+        target = urlparse(self.sel.url).hostname or ""
+        host = urlparse(resp.url).hostname or ""
+        # 精确主机或子域：endswith("deepseek.com") 会误匹配 evildeepseek.com
+        if host == target or host.endswith("." + target):
             self._net_hits.append((time.time(), resp.status))
 
     async def _wait_input(self, timeout: float = 20) -> None:

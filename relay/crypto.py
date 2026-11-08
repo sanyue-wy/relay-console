@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import keyring
 from cryptography.fernet import Fernet
 
@@ -31,7 +33,7 @@ def set_api_key(value: str) -> None:
 
 
 # ---------------- 平台账号凭据（P3.8，可选功能）
-# 条目名 = "platform:<平台>:<账号>"，内容 = "<用户名>:<密码>"。
+# 条目名 = "platform:<平台>:<账号>"，内容 = JSON {"u": 用户名, "p": 密码}。
 # 只由控制台进程在打开平台时读取并注入登录表单；不落盘、不进日志、MCP/Agent 永远接触不到。
 CRED_PLATFORM_PREFIX = "platform:"
 
@@ -41,14 +43,22 @@ def _platform_cred_name(pid: str, account: str) -> str:
 
 
 def set_platform_credential(pid: str, account: str, username: str, secret: str) -> None:
-    keyring.set_password(SERVICE, _platform_cred_name(pid, account), f"{username}:{secret}")
+    # JSON 而不是 "user:pass"：用户名里带冒号也不会解析错
+    payload = json.dumps({"u": username, "p": secret}, ensure_ascii=False)
+    keyring.set_password(SERVICE, _platform_cred_name(pid, account), payload)
 
 
 def get_platform_credential(pid: str, account: str) -> tuple[str, str] | None:
     raw = keyring.get_password(SERVICE, _platform_cred_name(pid, account))
     if not raw:
         return None
-    user, _, secret = raw.partition(":")
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and "u" in data and "p" in data:
+            return str(data["u"]), str(data["p"])
+    except ValueError:
+        pass
+    user, _, secret = raw.partition(":")     # 兼容旧版 "user:pass" 条目
     return user, secret
 
 

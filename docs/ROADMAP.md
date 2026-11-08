@@ -74,3 +74,39 @@
    读写，每次读取都要人批准。若 Agent 本身可信度不足，这比雏形更安全。
 2. **不管理账号密码。** 雏形参考 psamvault / moonlighting 做“凭据 broker 注入”；
    工程选择根本不碰密码（手动登录 + 持久 profile），凭据面为零，broker 层可省。
+
+## 四、代码审查修复（2026-11-08，基于 a81e873）
+
+### 已修复
+- **XSS**：`esc()` 补 `"` / `'`；所有动态内容转义；前端逻辑外置到 `static/app.js`，
+  删除全部内联 `onclick`，改用 `data-act` 事件委托；响应加 `script-src 'self'` CSP、
+  `X-Frame-Options`、`nosniff`、`no-referrer`。已用真实浏览器验证：标题注入
+  `"><img onerror=...>` 只显示为文本，脚本不执行。
+- **调试端口冲突**：端口改为 `base + 10*账号序号`（每平台最多 10 个账号），
+  不再与相邻平台 base 相撞；浏览器锁改为每个“平台+账号”一把。
+- **按账号冷却**：只有平台下所有账号都冷却才跳过该平台，其余账号仍可接力。
+- **Agent 身份**：`create_agent` 重名报 `AGENT_EXISTS`，不再 `INSERT OR REPLACE` 复活
+  已吊销身份；名字限制中英文/数字/`_ . -`，防逗号破坏 audience、引号破坏前端。
+- **授权 TOCTOU**：发布时记录内容哈希；批准时把哈希写入票据；fetch 时不一致返回
+  `CONTENT_CHANGED`；fetch 时重新校验 audience。
+- **接力**：`new_chat + 交接包 + send + receive` 在同一把锁内；`is_handoff` 显式标志；
+  超长交接包保留头部/摘要、只裁回放；`NotReady/SelectorBroken` 也尝试下一个目标；
+  全部失败回滚已入库的用户消息；后台任务保留引用并取回异常。
+- **控制台**：bootstrap token 一次性（换 HttpOnly cookie 后作废）；TrustedHost 只允许
+  本机 Host；`KeyError` → 404；对局任务取消不再抛 `CancelledError`；对局中途失败回滚
+  本轮发言；429 匹配改为精确主机/子域。
+- **存储**：`messages(limit)` 在 SQL 层截取 + `(session_id,id)` 索引；开启 WAL；
+  `items.session_id` 唯一索引 + 单事务发布；凭据改存 JSON（用户名含冒号不再解析错）；
+  `save_config` 临时文件 + `os.replace` 原子替换，并把数据路径写回相对形式。
+- **工程**：`Config.__getattr__` 抛 `AttributeError`；`requirements-dev.txt` 拆分
+  pytest/pywin32/pyinstaller；`RelayConsole.spec` 不再入库（由 build_exe 现场生成）。
+
+### 本轮未做（记录取舍）
+- **异步路径里的同步 sqlite**：改为 `asyncio.to_thread` / aiosqlite 会牵动整个存储层
+  调用形态，收益主要是高并发下的事件循环延迟；当前单用户控制台优先级低。
+- **app import 时加载配置/建目录**：改成 app factory 需要重排模块级路由与测试注入方式，
+  留待下一次结构调整。
+- **冷却持久化**：重启后冷却丢失，目前可用配置里的默认冷却时间兜底。
+- **官方 API 适配器**：审查建议给 DeepSeek/Kimi/Gemini 写官方 API 参与者。这是新功能
+  方向（`Participant` 规格已支持），不属于本轮缺陷修复；需要 API key 与计费决策，
+  单独立项。

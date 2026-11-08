@@ -14,7 +14,8 @@ def make_client(tmp_path, monkeypatch):
     monkeypatch.setattr(appmod, "get_fernet", lambda n: keys.setdefault(n, Fernet(Fernet.generate_key())))
     monkeypatch.setattr(appmod, "get_api_key", lambda: None)
     monkeypatch.setitem(appmod.CFG, "data_dir", str(tmp_path))
-    return TestClient(appmod.app)
+    # TrustedHostMiddleware 只放行本机 Host，TestClient 默认的 testserver 会被 400
+    return TestClient(appmod.app, base_url="http://127.0.0.1")
 
 
 def test_auth_and_approval_loop(tmp_path, monkeypatch):
@@ -57,11 +58,14 @@ def test_resume_chat_and_session_status(tmp_path, monkeypatch):
         assert d["platform"] == "deepseek" and d["account"] == "main"
         assert c.post("/api/sessions/resume", headers=H,
                       json={"platform": "nope", "url": "x"}).status_code == 400
-        # Agent 读会话状态：不存在拒绝，存在需批准，批准后只给状态不给正文
+        # Agent 读会话状态：申请阶段不暴露会话是否存在（防枚举），批准后 fetch 才判 404
         tok = c.post("/api/agents", headers=H, json={"name": "st"}).json()["token"]
         A = {"Authorization": f"Bearer {tok}"}
-        assert c.post("/agent/requests", headers=A,
-                      json={"scope_type": "session", "session_id": "s_none", "reason": "r"}).status_code == 400
+        ghost = c.post("/agent/requests", headers=A,
+                       json={"scope_type": "session", "session_id": "s_none", "reason": "r"}).json()["request_id"]
+        c.post(f"/api/approvals/{ghost}/approve", headers=H)
+        r = c.post(f"/agent/requests/{ghost}/fetch", headers=A)
+        assert r.status_code == 400 and r.json()["error"] == "NOT_FOUND"
         rid = c.post("/agent/requests", headers=A,
                      json={"scope_type": "session", "session_id": sid, "reason": "r"}).json()["request_id"]
         assert c.post(f"/agent/requests/{rid}/fetch", headers=A).json()["error"] == "NOT_APPROVED"

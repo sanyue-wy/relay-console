@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
@@ -29,7 +30,8 @@ from .storage import ArenaPool, MainPool, PoolError
 from .summarizer import Summarizer
 
 CFG = load_config()
-CONSOLE_TOKEN = secrets.token_urlsafe(24)
+CONSOLE_TOKEN = secrets.token_urlsafe(24)          # 写进 cookie 的长期令牌
+_BOOTSTRAP_TOKEN: str | None = secrets.token_urlsafe(24)   # 只用于启动时换 cookie，一次即废
 STATIC = Path(__file__).with_name("static")
 
 
@@ -51,10 +53,12 @@ def _auto_open_url(cfg) -> str | None:
         return None
     if os.environ.get("RELAY_NO_OPEN") == "1":      # 脚本/测试等程序化启动可显式关闭
         return None
+    if not _BOOTSTRAP_TOKEN:                        # 已经用掉（一次性）
+        return None
     host = cfg["host"]
     if host in ("0.0.0.0", "::"):
         host = "127.0.0.1"
-    return f"http://{host}:{int(cfg['port'])}/?token={CONSOLE_TOKEN}"
+    return f"http://{host}:{int(cfg['port'])}/?token={_BOOTSTRAP_TOKEN}"
 
 
 def _schedule_auto_open(cfg) -> None:
@@ -78,8 +82,8 @@ async def lifespan(app: FastAPI):
         browser_desc = f"指纹浏览器 {S.browser.backend_name}（每个平台账号一个环境）"
     print(f"\n  Relay Console v{APP_VERSION}", flush=True)
     print(f"  浏览器承载: {browser_desc}", flush=True)
-    url = f"http://{CFG['host']}:{CFG['port']}/?token={CONSOLE_TOKEN}"
-    print(f"  控制台地址: {url}\n", flush=True)
+    url = f"http://{CFG['host']}:{CFG['port']}/?token={_BOOTSTRAP_TOKEN}"
+    print(f"  控制台地址（一次性，打开后即失效）: {url}\n", flush=True)
     try:
         (data_home() / "console_url.txt").write_text(url, encoding="utf-8")
     except OSError:
@@ -90,6 +94,28 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Relay Console", lifespan=lifespan)
+# 只接受本机 Host，防 DNS rebinding 把控制台暴露给恶意域名
+app.add_middleware(TrustedHostMiddleware,
+                   allowed_hosts=["127.0.0.1", "localhost", "::1", "[::1]"])
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    # 脚本只允许同源外部文件（前端已无内联事件处理器）；样式仍允许内联
+    resp.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; connect-src 'self'; base-uri 'none'; "
+        "frame-ancestors 'none'; form-action 'self'")
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
+
+
+@app.exception_handler(KeyError)
+async def _key_err(_, e: KeyError):
+    return JSONResponse({"error": "NOT_FOUND", "detail": str(e)}, status_code=404)
 
 
 @app.exception_handler(PoolError)
@@ -120,13 +146,24 @@ def require_agent(authorization: str | None = Header(None)) -> str:
 
 @app.get("/")
 def index(request: Request, token: str | None = None):
-    if token and secrets.compare_digest(token, CONSOLE_TOKEN):
+    global _BOOTSTRAP_TOKEN
+    if token and _BOOTSTRAP_TOKEN and secrets.compare_digest(token, _BOOTSTRAP_TOKEN):
+        _BOOTSTRAP_TOKEN = None          # 一次性：换成 cookie 后立即作废
+        try:
+            (data_home() / "console_url.txt").unlink(missing_ok=True)   # 不把已用 token 留在磁盘
+        except OSError:
+            pass
         resp = RedirectResponse("/")
-        resp.set_cookie("console_token", token, httponly=True, samesite="strict")
+        resp.set_cookie("console_token", CONSOLE_TOKEN, httponly=True, samesite="strict")
         return resp
     if not secrets.compare_digest(request.cookies.get("console_token") or "", CONSOLE_TOKEN):
         raise HTTPException(401, "用启动时打印的带 token 地址打开")
     return FileResponse(STATIC / "index.html")
+
+
+@app.get("/app.js")
+def app_js():
+    return FileResponse(STATIC / "app.js", media_type="application/javascript")
 
 
 # ---------------------------------------------------------------- 控制台：平台与会话
@@ -329,16 +366,32 @@ async def run_round(aid: str):
     t = S.round_tasks.get(aid)
     if t and not t.done():
         raise HTTPException(409, "本轮仍在进行")
-    S.round_tasks[aid] = asyncio.create_task(S.runner.run_round(aid))
+    task = asyncio.create_task(S.runner.run_round(aid))
+    S.round_tasks[aid] = task
+
+    def _done(t: asyncio.Task) -> None:
+        if not t.cancelled():
+            t.exception()      # 取回异常，避免 "never retrieved"；状态由 arena_detail 读取
+
+    task.add_done_callback(_done)
     return {"started": True}
+
+
+def _round_status(t: asyncio.Task | None) -> str:
+    if t is None:
+        return "idle"
+    if not t.done():
+        return "running"
+    if t.cancelled():
+        return "cancelled"
+    err = t.exception()
+    return f"error: {err}" if err else "done"
 
 
 @app.get("/api/arenas/{aid}", dependencies=C)
 def arena_detail(aid: str):
     t = S.round_tasks.get(aid)
-    status = "idle" if not t else ("running" if not t.done() else
-                                   ("error: " + str(t.exception())) if t.exception() else "done")
-    return S.arena.arena(aid) | {"turns": S.arena.turns(aid), "round_status": status}
+    return S.arena.arena(aid) | {"turns": S.arena.turns(aid), "round_status": _round_status(t)}
 
 
 # ---------------------------------------------------------------- 控制台：设置与账号登记
@@ -445,11 +498,8 @@ def agent_pool(pid: str = Depends(require_agent)):
 
 @app.post("/agent/requests")
 def agent_request(b: ReadReq, pid: str = Depends(require_agent)):
-    if b.scope_type == "session":          # 会话存在性在这里校验（主池只有控制台能读）
-        try:
-            S.main.get_session(b.session_id or "")
-        except KeyError:
-            raise HTTPException(400, "session not found")
+    # 不在申请阶段校验会话是否存在：否则 Agent 能靠 400/200 枚举会话 ID。
+    # 存在性留到 fetch 阶段（那时已获批准）再判断。
     scope = {"item_ids": b.item_ids} if b.scope_type == "items" else \
         {"arena_id": b.arena_id} if b.scope_type == "turn" else {"session_id": b.session_id}
     return {"request_id": S.arena.create_request(pid, b.scope_type, scope, b.reason), "status": "pending"}
@@ -470,8 +520,14 @@ def agent_fetch(rid: str, pid: str = Depends(require_agent)):
 
 
 def _session_status_payload(sid: str) -> dict:
-    """会话状态（只读、经批准）：接力链、各平台账号冷却、摘要预览。不含对话正文。"""
-    s = S.main.get_session(sid)
+    """会话状态（只读、经批准）：接力链、各平台账号冷却、摘要预览。
+
+    摘要由对话正文生成，可能包含要点；这里只给前 600 字，不是“绝不包含任何正文”。
+    """
+    try:
+        s = S.main.get_session(sid)
+    except KeyError as exc:
+        raise PoolError("NOT_FOUND", sid) from exc
     return {"title": s.title, "platform": s.current_platform, "account": s.account,
             "chain": s.chain, "platforms": S.engine.platform_status(),
             "summary_preview": (s.summary or "")[:600]}

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import sqlite3
 import threading
@@ -42,6 +43,8 @@ class _DB:
         self.lock = threading.Lock()
         self.f = fernet
         with self.lock:
+            self.conn.execute("PRAGMA journal_mode=WAL")      # 读写并发更好，崩溃恢复更稳
+            self.conn.execute("PRAGMA synchronous=NORMAL")
             self.conn.executescript(schema)   # schema 为模块级字面量
             self.conn.commit()
 
@@ -80,6 +83,7 @@ CREATE TABLE IF NOT EXISTS sessions(
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT,
   platform TEXT, content_enc BLOB, ts REAL);
+CREATE INDEX IF NOT EXISTS messages_session_id ON messages(session_id, id);
 CREATE TABLE IF NOT EXISTS handoffs(
   id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, from_platform TEXT,
   to_platform TEXT, to_account TEXT, reason TEXT, ts REAL);
@@ -167,12 +171,23 @@ class MainPool:
             return int(cur.lastrowid)
 
     def messages(self, sid: str, after_id: int = 0, limit: int | None = None) -> list[dict]:
+        """按 id 升序返回；limit 在 SQL 层截取最后 N 条，避免先解密全表。"""
         with self.db.read() as conn:
-            rows = conn.execute("SELECT id,role,platform,content_enc,ts FROM messages "
-                                "WHERE session_id=? AND id>? ORDER BY id", (sid, after_id)).fetchall()
-        out = [{"id": r["id"], "role": r["role"], "platform": r["platform"],
-                "content": self.db.dec(r["content_enc"]), "ts": r["ts"]} for r in rows]
-        return out[-limit:] if limit else out
+            if limit:
+                rows = conn.execute("SELECT id,role,platform,content_enc,ts FROM messages "
+                                    "WHERE session_id=? AND id>? ORDER BY id DESC LIMIT ?",
+                                    (sid, after_id, int(limit))).fetchall()
+                rows = rows[::-1]
+            else:
+                rows = conn.execute("SELECT id,role,platform,content_enc,ts FROM messages "
+                                    "WHERE session_id=? AND id>? ORDER BY id", (sid, after_id)).fetchall()
+        return [{"id": r["id"], "role": r["role"], "platform": r["platform"],
+                 "content": self.db.dec(r["content_enc"]), "ts": r["ts"]} for r in rows]
+
+    def delete_message(self, mid: int) -> None:
+        """回滚一条已入库但最终没送出去的用户消息（接力全部失败时用）。"""
+        with self.db.write() as conn:
+            conn.execute("DELETE FROM messages WHERE id=?", (mid,))
 
     def set_summary(self, sid: str, summary: str, upto_id: int) -> None:
         with self.db.write() as conn:
@@ -189,7 +204,8 @@ class MainPool:
 ARENA_SCHEMA = """
 CREATE TABLE IF NOT EXISTS items(
   id TEXT PRIMARY KEY, title TEXT, content_enc BLOB, audience TEXT DEFAULT '*',
-  session_id TEXT, published_at REAL);
+  session_id TEXT, published_at REAL, content_hash TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS items_session_uq ON items(session_id) WHERE session_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS agents(
   participant_id TEXT PRIMARY KEY, display_name TEXT, token_hash TEXT UNIQUE, created_at REAL, revoked INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS arenas(
@@ -207,7 +223,7 @@ CREATE TABLE IF NOT EXISTS read_requests(
   id TEXT PRIMARY KEY, participant_id TEXT, scope_type TEXT, scope TEXT, reason TEXT,
   status TEXT, created_at REAL, decided_at REAL);
 CREATE TABLE IF NOT EXISTS tickets(
-  request_id TEXT PRIMARY KEY, expires_at REAL, used INTEGER DEFAULT 0);
+  request_id TEXT PRIMARY KEY, expires_at REAL, used INTEGER DEFAULT 0, scope_hash TEXT);
 CREATE TABLE IF NOT EXISTS audit(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, actor TEXT, action TEXT, detail TEXT);
 """
@@ -220,14 +236,28 @@ class PoolError(Exception):
 
 
 def _migrate_arena(conn: sqlite3.Connection) -> None:
-    """旧库补列（表名/列名均为本模块常量，不来自外部输入）。"""
+    """旧库补列/补索引（表名/列名均为本模块常量，不来自外部输入）。"""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(items)").fetchall()}
     if "session_id" not in cols:
         conn.execute("ALTER TABLE items ADD COLUMN session_id TEXT")
+    if "content_hash" not in cols:
+        conn.execute("ALTER TABLE items ADD COLUMN content_hash TEXT")
+    tcols = {r["name"] for r in conn.execute("PRAGMA table_info(tickets)").fetchall()}
+    if "scope_hash" not in tcols:
+        conn.execute("ALTER TABLE tickets ADD COLUMN scope_hash TEXT")
+    # 会话池与读取池 1:1：老库可能已有重复 session_id，先保留最新一条再建唯一索引
+    conn.execute("DELETE FROM items WHERE session_id IS NOT NULL AND rowid NOT IN ("
+                 "SELECT MAX(rowid) FROM items WHERE session_id IS NOT NULL GROUP BY session_id)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS items_session_uq "
+                 "ON items(session_id) WHERE session_id IS NOT NULL")
 
 
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def content_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 class ArenaPool:
@@ -236,6 +266,10 @@ class ArenaPool:
         self.ticket_ttl = ticket_ttl
         with self.db.write() as conn:
             _migrate_arena(conn)
+            # 老条目补内容哈希（授权时用它锁定“你批准的那一版内容”）
+            for r in conn.execute("SELECT id,content_enc FROM items WHERE content_hash IS NULL").fetchall():
+                conn.execute("UPDATE items SET content_hash=? WHERE id=?",
+                             (content_hash(self.db.dec(r["content_enc"]) or ""), r["id"]))
 
     # ---------------- 审计
     def audit(self, actor: str, action: str, detail: Any = "") -> None:
@@ -249,11 +283,19 @@ class ArenaPool:
         return [dict(r) for r in rows]
 
     # ---------------- Agent 身份
+    _NAME_RE = re.compile(r"[A-Za-z0-9_\u4e00-\u9fa5.-]{1,32}")
+
     def create_agent(self, name: str) -> tuple[str, str]:
+        """新建 Agent。名字会进 participant_id 和前端，限制字符集；重名直接报错，不复用旧身份。"""
+        name = (name or "").strip()
+        if not self._NAME_RE.fullmatch(name):
+            raise PoolError("BAD_NAME", "名字只能用中英文、数字、下划线、点、连字符，长度 1-32")
         pid = f"agent:{name}"
         token = secrets.token_urlsafe(32)
         with self.db.write() as conn:
-            conn.execute("INSERT OR REPLACE INTO agents(participant_id,display_name,token_hash,created_at,revoked) "
+            if conn.execute("SELECT 1 FROM agents WHERE participant_id=?", (pid,)).fetchone():
+                raise PoolError("AGENT_EXISTS", f"{pid} 已存在；换一个名字，或先吊销后换名新建")
+            conn.execute("INSERT INTO agents(participant_id,display_name,token_hash,created_at,revoked) "
                          "VALUES(?,?,?,?,0)", (pid, name, hash_token(token), _now()))
         self.audit("user", "create_agent", pid)
         return pid, token
@@ -277,25 +319,30 @@ class ArenaPool:
     # ---------------- 发布条目（只能由控制台调用）
     def publish_item(self, title: str, content: str, audience: str = "*",
                      session_id: str | None = None) -> str:
-        """发布对抗池条目。带 session_id 时与该会话保持一一对应：已有条目则原位更新。"""
-        if session_id:
-            with self.db.read() as conn:
+        """发布对抗池条目。带 session_id 时与该会话保持一一对应：已有条目则原位更新。
+
+        读-改-写放在同一个写事务里，避免并发发布产生两条同会话条目；
+        content_hash 供授权时锁定内容版本（防止批准后内容被换掉）。
+        """
+        chash = content_hash(content)
+        with self.db.write() as conn:
+            r = None
+            if session_id:
                 r = conn.execute("SELECT id FROM items WHERE session_id=?", (session_id,)).fetchone()
             if r:
                 iid = r["id"]
-                with self.db.write() as conn:
-                    conn.execute("UPDATE items SET title=?, content_enc=?, audience=?, published_at=? "
-                                 "WHERE id=?", (title, self.db.enc(content), audience, _now(), iid))
-                self.audit("user", "update_item", {"id": iid, "title": title, "audience": audience,
-                                                   "session_id": session_id})
-                return iid
-        iid = _id("ap")
-        with self.db.write() as conn:
-            conn.execute("INSERT INTO items(id,title,content_enc,audience,session_id,published_at) "
-                         "VALUES(?,?,?,?,?,?)",
-                         (iid, title, self.db.enc(content), audience, session_id, _now()))
-        self.audit("user", "publish_item", {"id": iid, "title": title, "audience": audience,
-                                            "session_id": session_id})
+                conn.execute("UPDATE items SET title=?, content_enc=?, audience=?, published_at=?, "
+                             "content_hash=? WHERE id=?",
+                             (title, self.db.enc(content), audience, _now(), chash, iid))
+                action = "update_item"
+            else:
+                iid = _id("ap")
+                conn.execute("INSERT INTO items(id,title,content_enc,audience,session_id,published_at,content_hash) "
+                             "VALUES(?,?,?,?,?,?,?)",
+                             (iid, title, self.db.enc(content), audience, session_id, _now(), chash))
+                action = "publish_item"
+        self.audit("user", action, {"id": iid, "title": title, "audience": audience,
+                                    "session_id": session_id})
         return iid
 
     def delete_item(self, iid: str) -> None:
@@ -347,6 +394,11 @@ class ArenaPool:
         with self.db.write() as conn:
             conn.execute("INSERT INTO turns(arena_id,round,participant_id,side,content_enc,ts) VALUES(?,?,?,?,?,?)",
                          (aid, rnd, pid, side, self.db.enc(content), _now()))
+
+    def delete_round(self, aid: str, rnd: int) -> None:
+        """撤销某轮已写入的发言（该轮中途失败时回滚，保证轮次编号连续）。"""
+        with self.db.write() as conn:
+            conn.execute("DELETE FROM turns WHERE arena_id=? AND round=?", (aid, rnd))
 
     def turns(self, aid: str) -> list[dict]:
         with self.db.read() as conn:
@@ -430,16 +482,27 @@ class ArenaPool:
             out.append(d)
         return out
 
+    def _items_scope_hash(self, conn: sqlite3.Connection, item_ids: list[str]) -> str:
+        parts = []
+        for iid in sorted(item_ids or []):
+            r = conn.execute("SELECT content_hash FROM items WHERE id=?", (iid,)).fetchone()
+            parts.append(f"{iid}:{r['content_hash'] if r else ''}")
+        return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
     def decide(self, rid: str, approve: bool, actor: str = "user") -> None:
         with self.db.write() as conn:
-            r = conn.execute("SELECT status FROM read_requests WHERE id=?", (rid,)).fetchone()
+            r = conn.execute("SELECT status,scope_type,scope FROM read_requests WHERE id=?", (rid,)).fetchone()
             if not r or r["status"] != "pending":
                 raise PoolError("NOT_PENDING")
             conn.execute("UPDATE read_requests SET status=?, decided_at=? WHERE id=?",
                          ("approved" if approve else "denied", _now(), rid))
             if approve:
-                conn.execute("INSERT INTO tickets(request_id,expires_at,used) VALUES(?,?,0)",
-                             (rid, _now() + self.ticket_ttl))
+                scope = json.loads(r["scope"])
+                # 把“批准时看到的内容版本”写进票据；fetch 时对不上就拒绝
+                shash = (self._items_scope_hash(conn, scope.get("item_ids") or [])
+                         if r["scope_type"] == "items" else None)
+                conn.execute("INSERT INTO tickets(request_id,expires_at,used,scope_hash) VALUES(?,?,0,?)",
+                             (rid, _now() + self.ticket_ttl, shash))
         self.audit(actor, "approve" if approve else "deny", rid)
 
     def approve_round(self, aid: str) -> int:
@@ -468,15 +531,19 @@ class ArenaPool:
                              (rid, pid)).fetchone()
             if not r or r["status"] != "approved":
                 raise PoolError("NOT_APPROVED")
-            t = conn.execute("SELECT expires_at,used FROM tickets WHERE request_id=?", (rid,)).fetchone()
+            t = conn.execute("SELECT expires_at,used,scope_hash FROM tickets WHERE request_id=?", (rid,)).fetchone()
             if not t:
                 raise PoolError("NOT_APPROVED")
             if t["used"]:
                 raise PoolError("TICKET_USED")
             if t["expires_at"] < _now():
                 raise PoolError("TICKET_EXPIRED")
-            conn.execute("UPDATE tickets SET used=1 WHERE request_id=?", (rid,))
             scope = json.loads(r["scope"])
+            if r["scope_type"] == "items" and t["scope_hash"]:
+                # 批准后条目被再次发布（原位更新）→ 内容已不是你审过的那一版
+                if self._items_scope_hash(conn, scope.get("item_ids") or []) != t["scope_hash"]:
+                    raise PoolError("CONTENT_CHANGED", "批准后内容已变化，请重新发布并重新批准")
+            conn.execute("UPDATE tickets SET used=1 WHERE request_id=?", (rid,))
         self.audit(pid, "fetch", rid)
         if r["scope_type"] == "session":
             # 只回标记；状态/摘要预览由控制台层从主池组装（仍受本次批准约束）
@@ -485,9 +552,11 @@ class ArenaPool:
             out = []
             for iid in scope["item_ids"]:
                 with self.db.read() as conn:
-                    it = conn.execute("SELECT id,title,content_enc FROM items WHERE id=?", (iid,)).fetchone()
-                if it:
-                    out.append({"id": it["id"], "title": it["title"], "content": self.db.dec(it["content_enc"])})
+                    it = conn.execute("SELECT id,title,content_enc,audience FROM items WHERE id=?",
+                                      (iid,)).fetchone()
+                if not it or not self._visible(it["audience"], pid):
+                    raise PoolError("NOT_IN_POOL", iid)     # 批准后受众被改窄/条目被删
+                out.append({"id": it["id"], "title": it["title"], "content": self.db.dec(it["content_enc"])})
             return out
         with self.db.write() as inbox_conn:
             ib = inbox_conn.execute("SELECT * FROM inbox WHERE arena_id=? AND participant_id=? AND status IN "

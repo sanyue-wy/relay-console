@@ -23,3 +23,4 @@ config.yaml
 dist/
 build/
 console_url.txt
+RelayConsole.spec      # PyInstaller 生成，内含本机绝对路径，由 scripts/build_exe.py 现场生成

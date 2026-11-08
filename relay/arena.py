@@ -65,15 +65,20 @@ class ArenaRunner:
         arena = self.pool.arena(aid)
         rnd = self.pool.last_round(aid) + 1
         results = []
-        for seat in arena["seats"]:
-            prompt = self._prompt(arena, seat, rnd)
-            if seat["kind"] == "web":
-                r = await self.engine.ask(self._session_for(aid, seat["participant_id"]), prompt)
-                text = r["text"]
-            else:
-                ag = AgentParticipant(self.pool, aid, seat["participant_id"], rnd)
-                await ag.send(Turn("moderator", prompt, "moderator"))
-                text = (await ag.receive(self.cfg["arena"]["agent_turn_timeout"])).text
-            self.pool.add_turn(aid, rnd, seat["participant_id"], seat["side"], text)
-            results.append({"participant_id": seat["participant_id"], "side": seat["side"], "text": text})
+        try:
+            for seat in arena["seats"]:
+                prompt = self._prompt(arena, seat, rnd)
+                if seat["kind"] == "web":
+                    r = await self.engine.ask(self._session_for(aid, seat["participant_id"]), prompt)
+                    text = r["text"]
+                else:
+                    ag = AgentParticipant(self.pool, aid, seat["participant_id"], rnd)
+                    await ag.send(Turn("moderator", prompt, "moderator"))
+                    text = (await ag.receive(self.cfg["arena"]["agent_turn_timeout"])).text
+                self.pool.add_turn(aid, rnd, seat["participant_id"], seat["side"], text)
+                results.append({"participant_id": seat["participant_id"], "side": seat["side"], "text": text})
+        except Exception:
+            # 中途失败：撤掉本轮已写入的发言，否则下一轮 last_round+1 会错位
+            self.pool.delete_round(aid, rnd)
+            raise
         return results

@@ -25,7 +25,10 @@ APP_VERSION = "1.1.0"
 
 class Config(dict):
     def __getattr__(self, k: str) -> Any:
-        v = self[k]
+        try:
+            v = self[k]
+        except KeyError as exc:
+            raise AttributeError(k) from exc
         return Config(v) if isinstance(v, dict) else v
 
 
@@ -100,8 +103,26 @@ def platform_accounts(cfg, pid: str) -> list[str]:
     return list(accounts)
 
 
+def _portable_path(value: str) -> str:
+    """把解析后的绝对路径写回成相对数据根的路径，配置才能随数据目录一起搬走。"""
+    p = Path(value)
+    for base in (ROOT, data_home()):
+        try:
+            rel = p.relative_to(base)
+        except ValueError:
+            continue
+        return f"./{rel.as_posix()}"
+    return value
+
+
 def save_config(cfg) -> None:
-    """把当前生效配置整体写回 config.yaml（整体落盘，yaml 注释不保留）。"""
+    """把当前生效配置整体原子写回 config.yaml（yaml 注释不保留）。"""
+    data = dict(cfg)
+    for key in ("data_dir", "profiles_dir"):
+        if key in data:
+            data[key] = _portable_path(str(data[key]))
     p = config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(yaml.safe_dump(dict(cfg), allow_unicode=True, sort_keys=False), encoding="utf-8")
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    os.replace(tmp, p)      # 同目录原子替换：写一半断电也不会留下半截配置

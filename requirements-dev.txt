@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# 开发/打包工具（运行控制台不需要）
+pytest>=8
+pywin32>=306 ; sys_platform == "win32"   # scripts/make_shortcut.py 生成快捷方式
+pyinstaller>=6                            # scripts/build_exe.py 打包 exe
