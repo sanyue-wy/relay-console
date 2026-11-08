@@ -41,7 +41,8 @@ relay-console/
     probe.py                探测/修正平台选择器（支持 --account）
     add_credential.py       录入平台账号登录凭据（autofill 用）
     fingerprint_profiles.py 列出指纹浏览器环境 ID（填 config 用）
-  tests/                    离线自测（无需浏览器），32 项
+    build_exe.py            打包 Windows exe（PyInstaller，分发用）
+  tests/                    离线自测（无需浏览器），35 项
 ```
 
 ## 安装（Windows）
@@ -51,7 +52,7 @@ python -m venv .venv
 pip install -r requirements.txt
 copy config.example.yaml config.yaml      # 改 chrome_path、Hark 地址、接力顺序、多账号
 python scripts/setup_keys.py              # 输入摘要 API key，存入 Windows 凭据管理器
-python -m pytest -q                       # 32 项自测应全部通过
+python -m pytest -q                       # 35 项自测应全部通过
 ```
 不需要 `playwright install`，程序连接你本机安装的 Chrome（或指纹浏览器提供的 CDP）。
 
@@ -173,6 +174,27 @@ class NewAIAdapter(_Base):
 3. `config.yaml` 的 `platforms` 加端口，`relay_order` 按需加入。
 4. 页面行为特殊时覆盖 `send / receive / _extract_last_reply / _limit_from_dom` 等钩子。
 非网页参与者（例如走官方 API 的模型）直接实现 `adapters/spec.py` 的 `Participant` 即可接入对抗模式。
+
+## 打包为 exe 分发（可选）
+**程序与数据分离**：源码运行时数据在仓库根（`config.yaml` / `data/` / `profiles/`）；exe 运行时
+数据统一放在 `%LOCALAPPDATA%\RelayConsole`，也可用环境变量 `RELAY_HOME` 指到任意目录
+（如 `D:\RelayData`）。程序目录可随时整体删除/替换，数据不受影响。
+
+打包（本机需要 Python）：
+```powershell
+pip install pyinstaller
+python scripts/build_exe.py
+# 产物：dist\RelayConsole\（程序目录）
+#       dist\RelayConsole-<版本>-win64.zip（发给别人的压缩包）
+```
+
+接收者使用：解压 zip → 双击 `RelayConsole.exe` → 首次运行自动在数据根生成
+`config.yaml`、`data/`、`profiles/`；启动日志与数据根下的 `console_url.txt` 里都有带
+token 的控制台地址（token 每次启动重新生成）。之后按「首次使用」登录各平台即可。
+
+**升级继承**：用新版本程序目录覆盖旧的即可——数据根本来就不在程序目录里，旧会话、
+读取池、登录态全部保留。三层保障：数据库缺列自动迁移；老 `config.yaml` 缺失的新键
+自动从模板补齐（只补缺、不覆盖已有值）；密钥存 Windows 凭据管理器，不随程序目录走。
 
 ## 已知限制
 - 网页版改版会让选择器失效：`SELECTOR_BROKEN` / `NOT_READY` 错误出现时运行 probe 修正。

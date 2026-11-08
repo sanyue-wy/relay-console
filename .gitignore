@@ -18,3 +18,8 @@ config.yaml
 # 本机工具状态，不属于工程
 .mimosa/
 .v2c/
+
+# 打包产物与本机运行痕迹
+dist/
+build/
+console_url.txt

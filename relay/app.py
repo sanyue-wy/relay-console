@@ -20,7 +20,7 @@ from adapters.spec import AdapterError
 
 from .arena import ArenaRunner
 from .browser import ChromeManager
-from .config import load_config, platform_accounts, save_config
+from .config import APP_VERSION, data_home, load_config, platform_accounts, save_config
 from .crypto import CRED_ARENA, CRED_MAIN, get_api_key, get_fernet, get_platform_credential
 from .relay_engine import RelayEngine
 from .storage import ArenaPool, MainPool, PoolError
@@ -54,8 +54,14 @@ async def lifespan(app: FastAPI):
         browser_desc = "自建 Chrome + 独立 profile（指纹不隔离）"
     else:
         browser_desc = f"指纹浏览器 {S.browser.backend_name}（每个平台账号一个环境）"
-    print(f"\n  浏览器承载: {browser_desc}", flush=True)
-    print(f"  控制台地址: http://{CFG['host']}:{CFG['port']}/?token={CONSOLE_TOKEN}\n", flush=True)
+    print(f"\n  Relay Console v{APP_VERSION}", flush=True)
+    print(f"  浏览器承载: {browser_desc}", flush=True)
+    url = f"http://{CFG['host']}:{CFG['port']}/?token={CONSOLE_TOKEN}"
+    print(f"  控制台地址: {url}\n", flush=True)
+    try:
+        (data_home() / "console_url.txt").write_text(url, encoding="utf-8")
+    except OSError:
+        pass
     yield
     await S.browser.close()
 

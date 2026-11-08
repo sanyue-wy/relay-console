@@ -1,11 +1,26 @@
+"""配置加载与数据目录。
+
+程序与数据分离：
+  - 源码运行：数据默认仍在仓库根（config.yaml / data/ / profiles/），与历史版本一致；
+  - exe 运行（PyInstaller 冻结）：数据统一放在 %LOCALAPPDATA%/RelayConsole，
+    程序目录可整体替换，升级直接继承旧数据；
+  - 两种方式都可用环境变量 RELAY_HOME 显式指定数据根目录（优先级最高）。
+
+升级继承的三层保障：数据库缺列由 _migrate_* 自动补齐；密钥存 Windows 凭据管理器、
+不随程序目录走；老 config.yaml 缺少的新键由 _deep_fill 从 config.example.yaml 补齐
+（只补缺、不覆盖已有值）。
+"""
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+APP_VERSION = "1.1.0"
 
 
 class Config(dict):
@@ -14,15 +29,65 @@ class Config(dict):
         return Config(v) if isinstance(v, dict) else v
 
 
+def is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def data_home() -> Path:
+    """数据根目录：RELAY_HOME 优先；exe 运行用 %LOCALAPPDATA%/RelayConsole；源码运行用仓库根。"""
+    env = os.environ.get("RELAY_HOME")
+    if env:
+        return Path(env)
+    if is_frozen():
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "RelayConsole"
+    return ROOT
+
+
+def config_path() -> Path:
+    return data_home() / "config.yaml"
+
+
+def _deep_fill(base: dict, defaults: dict) -> dict:
+    """用 defaults 补齐 base 缺失的键（递归；只补缺，绝不覆盖已有值）。"""
+    for k, v in defaults.items():
+        if k not in base:
+            base[k] = v
+        elif isinstance(base[k], dict) and isinstance(v, dict):
+            _deep_fill(base[k], v)
+    return base
+
+
+def _starter_config(home: Path) -> None:
+    """exe 首次运行：在数据根生成 config.yaml，数据路径固定在数据根内（程序/数据彻底分离）。"""
+    home.mkdir(parents=True, exist_ok=True)   # 数据根本身可能还不存在
+    example = yaml.safe_load((ROOT / "config.example.yaml").read_text(encoding="utf-8"))
+    example["data_dir"] = str(home / "data")
+    example["profiles_dir"] = str(home / "profiles")
+    header = ("# Relay Console 数据根目录配置（自动生成）\n"
+              f"# 程序版本 v{APP_VERSION}；升级/更换程序不影响本目录：config.yaml、data/、profiles/ 都在这里。\n")
+    (home / "config.yaml").write_text(
+        header + yaml.safe_dump(example, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
 def load_config(path: str | Path | None = None) -> Config:
-    p = Path(path) if path else ROOT / "config.yaml"
+    home = data_home()
+    p = Path(path) if path else config_path()
     if not p.exists():
-        p = ROOT / "config.example.yaml"
+        if path is None and is_frozen():
+            _starter_config(home)          # exe 首次运行，生成初始配置
+        else:
+            p = ROOT / "config.example.yaml"
     cfg = Config(yaml.safe_load(p.read_text(encoding="utf-8")))
+    # 升级继承：老配置缺失的新键从模板补齐（不覆盖已有值）
+    example = yaml.safe_load((ROOT / "config.example.yaml").read_text(encoding="utf-8"))
+    _deep_fill(cfg, example)
+    # 相对路径的落点：RELAY_HOME/exe 运行用数据根，源码运行保持仓库根（老用户不受影响）
+    base = home if (os.environ.get("RELAY_HOME") or is_frozen()) else ROOT
     for key in ("data_dir", "profiles_dir"):
         d = Path(cfg[key])
         if not d.is_absolute():
-            d = ROOT / d
+            d = base / d
         d.mkdir(parents=True, exist_ok=True)
         cfg[key] = str(d)
     return cfg
@@ -36,7 +101,7 @@ def platform_accounts(cfg, pid: str) -> list[str]:
 
 
 def save_config(cfg) -> None:
-    """把当前生效配置整体写回 config.yaml（首次保存会从 example 固化为正式配置）。"""
-    p = ROOT / "config.yaml"
-    yaml.safe_dump(dict(cfg), p.open("w", encoding="utf-8"),
-                   allow_unicode=True, sort_keys=False)
+    """把当前生效配置整体写回 config.yaml（整体落盘，yaml 注释不保留）。"""
+    p = config_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(yaml.safe_dump(dict(cfg), allow_unicode=True, sort_keys=False), encoding="utf-8")
