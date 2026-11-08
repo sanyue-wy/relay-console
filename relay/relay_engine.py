@@ -14,7 +14,7 @@ from adapters.spec import (AdapterError, Cap, LimitReached, LimitState, LimitSta
 from .browser import ChromeManager
 from .config import platform_accounts
 from .storage import MainPool
-from .summarizer import Summarizer
+from .summarizer import CONFIRM_QUESTION, Summarizer
 
 
 class RelayPolicy:
@@ -35,6 +35,15 @@ class RelayPolicy:
         return None
 
 
+class ManualHandoffError(Exception):
+    """手动切换的业务错误：code 用于接口层映射状态码（400/409）。"""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 class RelayEngine:
     def __init__(self, cfg, main: MainPool, browser: ChromeManager, summarizer: Summarizer,
                  policy: RelayPolicy | None = None):
@@ -43,6 +52,7 @@ class RelayEngine:
         self.cooldowns: dict[tuple[str, str], datetime] = {}     # 键 = (平台, 账号)
         self._adapters: dict[tuple[str, str], Participant] = {}
         self._tasks: set[asyncio.Task] = set()
+        self._session_locks: dict[str, asyncio.Lock] = {}        # 每会话一把锁：ask 与手动切换互斥
 
     def _spawn(self, coro) -> None:
         """后台任务保留引用，避免被 GC；同时取回异常，避免 "never retrieved" 噪音。"""
@@ -55,6 +65,9 @@ class RelayEngine:
                 t.exception()
 
         task.add_done_callback(_done)
+
+    def _session_lock(self, sid: str) -> asyncio.Lock:
+        return self._session_locks.setdefault(sid, asyncio.Lock())
 
     def accounts(self, pid: str) -> list[str]:
         return platform_accounts(self.cfg, pid)
@@ -167,6 +180,10 @@ class RelayEngine:
         return f"{head}{marker}\n（回放过长，仅保留最近部分）\n{replay[-budget:]}{tail}"
 
     async def ask(self, sid: str, text: str, timeout: float = 180) -> dict:
+        async with self._session_lock(sid):
+            return await self._ask_locked(sid, text, timeout)
+
+    async def _ask_locked(self, sid: str, text: str, timeout: float) -> dict:
         s = self.main.get_session(sid)
         mid = self.main.add_message(sid, "user", s.current_platform, text)
         platform, account = s.current_platform, s.account
@@ -178,32 +195,11 @@ class RelayEngine:
         try:
             while True:
                 ad = await self.adapter(platform, account)
-                lock = getattr(ad, "lock", None) or asyncio.Lock()
                 try:
                     # new_chat + 交接包 + send + receive 必须在同一把锁里：
                     # 否则释放锁后别的会话可能先占用同一页面，交接包会发进别人的对话。
-                    async with lock:
-                        s = self.main.get_session(sid)
-                        if is_handoff:
-                            await ad.new_chat()
-                            outgoing = await self._deliver_handoff(ad, package, text)
-                        else:
-                            outgoing = text
-                            if s.chat_ref and Cap.RESUME_URL in ad.info.caps:
-                                await ad.resume_chat(s.chat_ref)
-                            elif not s.chat_ref:
-                                await ad.new_chat()
-                        await ad.send(Turn("user", outgoing, "user"))
-                        sent_any = True
-                        reply = await ad.receive(timeout)
-                        if not reply.finished:
-                            st = await ad.limit_state()
-                            if st.status == LimitStatus.EXHAUSTED:
-                                raise LimitReached(st)
-                            if self.cfg.get("relay_on_truncation"):
-                                # 被截断且页面/网络都没有报警：可选地直接接力
-                                raise LimitReached(LimitState(LimitStatus.NEAR, None, "behavior",
-                                                              "回复被截断（relay_on_truncation 开启）"))
+                    reply = await self._locked_turn(ad, sid, text, package, timeout,
+                                                    is_handoff=is_handoff)
                     self.main.add_message(sid, "assistant", platform, reply.text)
                     self.main.set_chat_ref(sid, reply.chat_ref)
                     self._spawn(self.summ.maybe_update(sid))
@@ -232,4 +228,84 @@ class RelayEngine:
             # 一条都没送出去才回滚；已经送达过就保留记录（平台侧可能已经收到）
             if not sent_any:
                 self.main.delete_message(mid)
+            raise
+
+    async def _locked_turn(self, ad, sid: str, text: str, package: str | None, timeout: float,
+                           is_handoff: bool = False):
+        """拿锁 → new_chat/续聊 → 投递 → send → receive；自动接力（ask）与手动切换共用（A3）。
+
+        package 非 None（或 is_handoff=True）表示交接首条消息：开新会话并投递交接包。
+        """
+        lock = getattr(ad, "lock", None) or asyncio.Lock()
+        async with lock:
+            s = self.main.get_session(sid)
+            if is_handoff or package is not None:
+                await ad.new_chat()
+                outgoing = await self._deliver_handoff(ad, package, text)
+            else:
+                outgoing = text
+                if s.chat_ref and Cap.RESUME_URL in ad.info.caps:
+                    await ad.resume_chat(s.chat_ref)
+                elif not s.chat_ref:
+                    await ad.new_chat()
+            await ad.send(Turn("user", outgoing, "user"))
+            reply = await ad.receive(timeout)
+            if not reply.finished:
+                st = await ad.limit_state()
+                if st.status == LimitStatus.EXHAUSTED:
+                    raise LimitReached(st)
+                if self.cfg.get("relay_on_truncation"):
+                    # 被截断且页面/网络都没有报警：可选地直接接力
+                    raise LimitReached(LimitState(LimitStatus.NEAR, None, "behavior",
+                                                  "回复被截断（relay_on_truncation 开启）"))
+            return reply
+
+    async def manual_handoff(self, sid: str, platform: str, account: str,
+                             question: str | None = None, recent_rounds: int | None = None) -> dict:
+        """手动“总结并切换”（A3）：与自动接力共用 _locked_turn，但目标由用户指定。
+
+        - 发送成功才 switch_platform（reason=manual）；失败保持原平台并回滚已入库消息
+        - 不给源账号加冷却；目标账号冷却中不阻止，只在返回里带 warning
+        - 与 ask 共用每会话一把锁：会话忙时直接 409（ManualHandoffError BUSY）
+        """
+        lock = self._session_lock(sid)
+        if lock.locked():
+            raise ManualHandoffError("BUSY", "该会话正在问答或接力中，请稍后再试")
+        async with lock:
+            return await self._manual_handoff_locked(sid, platform, account, question, recent_rounds)
+
+    async def _manual_handoff_locked(self, sid: str, platform: str, account: str,
+                                     question: str | None, recent_rounds: int | None) -> dict:
+        s = self.main.get_session(sid)
+        if platform not in adapters.available():
+            raise ManualHandoffError("BAD_TARGET", f"未知平台 {platform}")
+        if account not in self.accounts(platform):
+            raise ManualHandoffError("BAD_TARGET", f"{platform} 没有登记账号 {account}；请先在账户页登记")
+        if (platform, account or "main") == (s.current_platform, s.account or "main"):
+            raise ManualHandoffError("SAME_TARGET", "目标就是当前平台和账号，无需切换")
+        account = account or "main"
+        warning = None
+        if self._cooling((platform, account)):
+            warning = f"目标账号正在冷却（至 {self.cooldowns[(platform, account)].isoformat()}），仍按你的要求切换"
+        # question 非空：先把问题作为 user 消息入库（发送失败会回滚）
+        mid = self.main.add_message(sid, "user", s.current_platform, question) if question else None
+        sent = False
+        try:
+            package = await self.summ.handoff_package(sid, recent_rounds)
+            ad = await self.adapter(platform, account)
+            text = question if question else CONFIRM_QUESTION
+            reply = await self._locked_turn(ad, sid, text, package, timeout=180, is_handoff=True)
+            sent = True
+            # 只有发送成功才切换：记录平台/账号/接力链/交接记录
+            self.main.switch_platform(sid, platform, "manual: 用户手动切换", new_account=account)
+            self.main.add_message(sid, "assistant", platform, reply.text)
+            self.main.set_chat_ref(sid, reply.chat_ref)
+            self._spawn(self.summ.maybe_update(sid))
+            return {"platform": platform, "account": account, "text": reply.text,
+                    "finished": reply.finished, "relays": [], "mode": "manual", "warning": warning}
+        except NotReady as e:
+            raise NotReady(f"请先在账户页登录 {platform}:{account}") from e
+        except Exception:
+            if not sent and mid is not None:
+                self.main.delete_message(mid)     # 失败回滚已入库的问题
             raise

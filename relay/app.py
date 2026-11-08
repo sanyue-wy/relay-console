@@ -27,7 +27,7 @@ from .browser import ChromeManager
 from .config import APP_VERSION, data_home, load_config, platform_accounts, save_config
 from .crypto import (CRED_ARENA, CRED_MAIN, delete_api_key, get_api_key, get_fernet,
                      get_platform_credential, set_api_key)
-from .relay_engine import RelayEngine
+from .relay_engine import ManualHandoffError, RelayEngine
 from .storage import ArenaPool, MainPool, PoolError
 from .summarizer import (PROVIDER_PRESETS, Summarizer, friendly_api_error, validate_base_url)
 
@@ -373,6 +373,23 @@ def handoff_preview(sid: str, platform: str | None = None, account: str | None =
     mode = S.engine.deliver_mode(info, len(package))
     return {"package": package, "chars": len(package),
             "target_limit": info.max_input_chars, "mode": mode}
+
+
+class ManualHandoff(BaseModel):
+    platform: str
+    account: str
+    question: str | None = None
+    recent_rounds: int | None = None
+
+
+@app.post("/api/sessions/{sid}/handoff", dependencies=C)
+async def manual_handoff(sid: str, b: ManualHandoff):
+    """手动“总结并切换”：目标由用户指定，失败保持原平台，会话忙时 409。"""
+    try:
+        return await S.engine.manual_handoff(sid, b.platform, b.account,
+                                             question=b.question, recent_rounds=b.recent_rounds)
+    except ManualHandoffError as e:
+        raise HTTPException(409 if e.code == "BUSY" else 400, e.message)
 
 
 # ---------------------------------------------------------------- 控制台：对抗池管理
