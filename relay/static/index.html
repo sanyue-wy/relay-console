@@ -120,6 +120,8 @@
   .badge.ok{color:#86efac;border-color:rgba(134,239,172,.4)}
   .badge.warn{color:#fcd34d;border-color:rgba(245,158,11,.4)}
   .badge.off{color:var(--dim2)}
+  .glow{box-shadow:0 0 0 3px rgba(167,139,250,.65),0 0 34px rgba(139,92,246,.4)!important;
+    border-color:rgba(167,139,250,.75)!important}
 
   pre#audit{white-space:pre-wrap;font:12px/1.6 SFMono-Regular,Menlo,Consolas,monospace;color:var(--dim);
     background:rgba(2,6,23,.55);border:1px solid var(--line);border-radius:14px;padding:12px;margin:8px 0 0}
@@ -153,6 +155,17 @@
 </nav>
 
 <div class="page on" id="page-start">
+  <div class="card" id="setupGuide" style="display:none">
+    <div class="row spread">
+      <h3 style="margin:0">🧭 新手引导</h3>
+      <span class="row">
+        <button class="ghost small" data-act="setupRefresh">刷新</button>
+        <button class="ghost small" data-act="setupDismiss">✕ 关闭引导</button>
+      </span>
+    </div>
+    <div class="row" id="setupSteps" style="margin-top:8px"></div>
+    <div class="hint">③ 摘要 API 可跳过：跳过后交接时只附带最近几轮原文（没有四小节摘要），其余功能不受影响。</div>
+  </div>
   <div class="g2 start-grid">
     <div>
       <div class="card">

@@ -119,14 +119,18 @@ class RelayEngine:
         """平台启用开关（B2）：关闭后不参与接力。"""
         return bool(self.cfg["platforms"].get(pid, {}).get("enabled", True))
 
-    async def account_status(self, pid: str, account: str) -> dict:
-        """单账号状态（B2）：未启动/已打开未登录/已登录 + 冷却；绝不启动任何浏览器。"""
+    async def account_status(self, pid: str, account: str, probe_remote: bool = True) -> dict:
+        """单账号状态（B2）：未启动/已打开未登录/已登录 + 冷却；绝不启动任何浏览器。
+
+        probe_remote=False（B4 引导统计用）：跳过指纹客户端的运行状态查询，只用本地已
+        知信息（调试端口/本进程 CDP 连接），避免引导页加载时逐个问本地 API。
+        """
         now = datetime.now()
         cd = self.cooldowns.get((pid, account))
         out = {"platform": pid, "account": account, "launched": False, "logged_in": False,
                "cooldown_until": cd.isoformat() if cd and cd > now else None}
         launched = self.browser.is_launched(pid, account) if self.browser else False
-        if not launched and self.browser and self.browser.backend is not None:
+        if not launched and probe_remote and self.browser and self.browser.backend is not None:
             # 指纹承载：问客户端该环境是否已在运行（不启动它）
             try:
                 profile_id = resolve_profile_id(self.browser.profile_map, pid, account)

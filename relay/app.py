@@ -834,6 +834,45 @@ def update_fingerprint(b: FingerprintUpdate):
             **_fingerprint_payload()}
 
 
+# ---------------------------------------------------------------- 控制台：新手引导（B4）
+async def _fingerprint_reachable() -> bool:
+    """指纹客户端本地 API 是否可达（短超时；chrome 承载恒为 True）。"""
+    fp = dict(CFG.get("fingerprint") or {})
+    if str(fp.get("backend") or "chrome") == "chrome":
+        return True
+    try:
+        be = build_backend({**fp, "startup_timeout_seconds": 5,
+                            "api_key": None if os.environ.get("ADSPOWER_API_KEY")
+                            else get_fingerprint_api_key()})
+        await be.list_profiles()
+        await be.aclose()
+        return True
+    except Exception:
+        return False
+
+
+@app.get("/api/setup/status", dependencies=C)
+async def setup_status():
+    """新手引导四步的完成状态（B4）。只读检查，绝不启动任何浏览器。"""
+    backend = S.browser.backend_name
+    if backend == "chrome":
+        p = Path(str(CFG.get("chrome_path") or ""))
+        chrome_ok = p.exists() and p.name.lower() == "chrome.exe"
+        backend_ok = chrome_ok
+    else:
+        chrome_ok = True                        # 指纹承载不依赖 chrome_path
+        backend_ok = await _fingerprint_reachable()
+    platforms_logged_in = 0
+    for p in S.engine.platform_status():
+        for a in p["accounts"]:
+            st = await S.engine.account_status(p["id"], a["account"], probe_remote=False)
+            if st["launched"] and st["logged_in"]:
+                platforms_logged_in += 1
+    return {"chrome_ok": chrome_ok, "backend": backend, "backend_ok": backend_ok,
+            "platforms_logged_in": platforms_logged_in,
+            "summary_ok": S.engine.summ.available}
+
+
 # ---------------------------------------------------------------- 控制台：摘要模型设置（A1）
 def _validation_detail(errors: list[dict]) -> dict:
     """字段级校验错误的响应体：前端显示在对应输入框旁边。"""

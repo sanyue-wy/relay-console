@@ -29,7 +29,7 @@ async function show(p) {
   PAGES.forEach(x => $('page-' + x).classList.toggle('on', x === p));
   document.querySelectorAll('#nav .tab').forEach(b => b.classList.toggle('on', b.dataset.page === p));
   try {
-    if (p === 'start') { await Promise.all([loadPlatformsLite(), loadSessionsData()]); renderSessions(); if (cur) await openS(cur, true); }
+    if (p === 'start') { await Promise.all([loadPlatformsLite(), loadSessionsData()]); renderSessions(); if (cur) await openS(cur, true); loadSetupGuide().catch(() => {}); }
     if (p === 'pool') { await loadPoolPage(); }
     if (p === 'accounts') { await loadAccounts(); }
     if (p === 'settings') { await loadSettings(); }
@@ -532,6 +532,50 @@ async function hoGo() {
 }
 function hoGoSettings() { hoClose(); show('settings'); }
 
+/* ---------------- 新手引导（B4） ---------------- */
+async function loadSetupGuide() {
+  const guide = $('setupGuide');
+  if (localStorage.getItem('relay_setup_dismissed') === '1') { guide.style.display = 'none'; return; }
+  let st;
+  try { st = await api('/api/setup/status'); } catch (e) { guide.style.display = 'none'; return; }
+  const skipped3 = localStorage.getItem('relay_setup_skip3') === '1';
+  const done = {
+    1: !!st.chrome_ok && !!st.backend_ok,
+    2: (st.platforms_logged_in || 0) > 0,
+    3: !!st.summary_ok || skipped3,
+    4: false,
+  };
+  done[4] = done[1] && done[2] && done[3];
+  const steps = [
+    { n: 1, label: '① 浏览器承载', page: 'settings', target: 'card-fingerprint' },
+    { n: 2, label: '② 登录一个平台', page: 'accounts', target: 'accList' },
+    { n: 3, label: '③ 摘要 API', page: 'settings', target: 'card-sumapi', skippable: true },
+    { n: 4, label: '④ 完成', page: null, target: null },
+  ];
+  $('setupSteps').innerHTML = steps.map(s => {
+    const mark = done[s.n] ? '<span class="badge ok">✓</span>' : '<span class="badge warn">…</span>';
+    const skip = s.skippable && !st.summary_ok
+      ? ` <a href="#" data-act="setupSkip3" style="color:var(--dim2);font-size:12px">跳过</a>` : '';
+    const click = s.target ? `data-act="setupGo" data-page="${s.page}" data-target="${s.target}"` : 'style="cursor:default"';
+    return `<span class="dot on ${s.target ? 'setupstep' : ''}" ${click} style="padding:4px 12px">${mark} ${esc(s.label)}${skip}</span>`;
+  });
+  guide.style.display = '';
+}
+function setupGo(page, target) {
+  show(page).then(() => setTimeout(() => {
+    const el = $(target);
+    if (el) { el.classList.add('glow'); setTimeout(() => el.classList.remove('glow'), 2600); }
+  }, 350));
+}
+function setupDismiss() {
+  localStorage.setItem('relay_setup_dismissed', '1');
+  $('setupGuide').style.display = 'none';
+}
+function setupSkip3() {
+  localStorage.setItem('relay_setup_skip3', '1');
+  loadSetupGuide();
+}
+
 /* ---------------- 事件委托（无内联 handler，CSP 可只允许同源脚本） ---------------- */
 const ACTIONS = {
   nav: d => show(d.nav),
@@ -542,6 +586,8 @@ const ACTIONS = {
   savePlatform: d => savePlatform(d.pid), checkLogin: d => checkLogin(d.pid, d.account),
   probeSel: d => probeSel(d.pid, d.account), chromeDetect, chromeValidate,
   fpTest, fpSave,
+  setupGo: d => setupGo(d.page, d.target), setupDismiss, setupRefresh: () => loadSetupGuide(),
+  setupSkip3,
   openS: d => openS(d.id),
   decide: d => decide(d.id, d.d),
   approveRound: d => approveRound(d.aid),
