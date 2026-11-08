@@ -28,6 +28,7 @@
   <select id="newPlatform"></select>
   <button class="primary" onclick="newSession()">新建</button>
   <div id="sessions"></div>
+  <div id="chatsBox"></div>
 </aside>
 
 <main>
@@ -65,10 +66,18 @@ const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]
 
 async function loadPlatforms(){
   const d=await api('/api/platforms'); platforms=d.platforms.map(p=>p.id);
-  document.getElementById('platforms').innerHTML=d.platforms.map(p=>`<div>${p.id} ${p.cooldown_until?'<span class=tag>冷却至 '+p.cooldown_until.slice(11,16)+'</span>':''} <button onclick="openP('${p.id}')">打开/登录</button></div>`).join('');
+  document.getElementById('platforms').innerHTML=d.platforms.map(p=>`<div><b>${p.id}</b> ${p.accounts.map(a=>`<span class=tag>${esc(a.account)}${a.cooldown_until?' ⛔冷却至 '+a.cooldown_until.slice(11,16):''}</span>`).join(' ')} <button onclick="openP('${p.id}')">打开/登录</button><button onclick="showChats('${p.id}')">历史会话</button></div>`).join('');
   document.getElementById('newPlatform').innerHTML=platforms.map(p=>`<option>${p}</option>`).join('');
 }
-async function openP(id){await api(`/api/platforms/${id}/open`,{method:'POST'})}
+async function openP(id){try{await api(`/api/platforms/${id}/open`,{method:'POST',body:JSON.stringify({autofill:true})})}catch(e){alert(e.message)}}
+async function showChats(id){
+  const d=await api(`/api/platforms/${id}/chats`).catch(e=>{alert(e.message);return{chats:[]}});
+  chatsBox.innerHTML=`<h3>${id} 历史会话</h3>`+(d.chats.map(c=>`<div class=item onclick="resumeChat('${id}','${encodeURIComponent(c.url||'')}','${esc(c.title).replace(/'/g,'')}')">${esc(c.title)}</div>`).join('')||'<span class=tag>未读到（probe 修正 chat_list_item）</span>');
+}
+async function resumeChat(pid,url,title){
+  const r=await api('/api/sessions/resume',{method:'POST',body:JSON.stringify({platform:pid,url:decodeURIComponent(url),title})});
+  cur=r.id; await loadSessions(); openS(cur);
+}
 async function loadSessions(){
   const s=await api('/api/sessions');
   document.getElementById('sessions').innerHTML=s.map(x=>`<div class="item ${x.id===cur?'on':''}" onclick="openS('${x.id}')">${esc(x.title)}<div class=tag>${x.chain.join(' → ')}</div></div>`).join('');
@@ -79,7 +88,7 @@ async function newSession(){
 }
 async function openS(id){
   cur=id; const s=await api('/api/sessions/'+id);
-  head.textContent=`${s.title} · 当前 ${s.platform} · 接力链 ${s.chain.join(' → ')}`;
+  head.textContent=`${s.title} · 当前 ${s.platform}:${s.account||'main'} · 接力链 ${s.chain.join(' → ')}`;
   chat.innerHTML=s.messages.map(m=>`<div class="msg ${m.role}"><div class=tag>${m.role==='user'?'你':m.platform}</div>${esc(m.content)}</div>`).join('');
   chat.scrollTop=chat.scrollHeight; loadSessions();
 }
@@ -106,7 +115,10 @@ async function loadItems(){
 async function delItem(id){await api('/api/pool/items/'+id,{method:'DELETE'});loadItems()}
 async function loadApprovals(){
   const d=await api('/api/approvals');
-  approvals.innerHTML=d.pending.map(r=>`<div class="card pending"><b>${esc(r.participant_id)}</b> 申请读取 ${r.scope_type==='items'?'条目：'+esc((r.titles||[]).join('、')):'对局 '+r.scope.arena_id+' 的本轮题目'}<div>理由：${esc(r.reason)}</div><button class=primary onclick="decide('${r.id}','approve')">批准一次</button>${d.allow_batch&&r.scope_type==='turn'?`<button onclick="approveRound('${r.scope.arena_id}')">本轮全部批准</button>`:''}<button onclick="decide('${r.id}','deny')">拒绝</button></div>`).join('')||'<span class=tag>暂无</span>';
+  const what=r=>r.scope_type==='items'?'条目：'+esc((r.titles||[]).join('、'))
+    :r.scope_type==='turn'?'对局 '+r.scope.arena_id+' 的本轮题目'
+    :'会话 '+r.scope.session_id+' 的状态/摘要预览';
+  approvals.innerHTML=d.pending.map(r=>`<div class="card pending"><b>${esc(r.participant_id)}</b> 申请读取 ${what(r)}<div>理由：${esc(r.reason)}</div><button class=primary onclick="decide('${r.id}','approve')">批准一次</button>${d.allow_batch&&r.scope_type==='turn'?`<button onclick="approveRound('${r.scope.arena_id}')">本轮全部批准</button>`:''}<button onclick="decide('${r.id}','deny')">拒绝</button></div>`).join('')||'<span class=tag>暂无</span>';
 }
 async function approveRound(aid){try{await api(`/api/arenas/${aid}/approve-round`,{method:'POST'})}catch(e){alert(e.message)}loadApprovals()}
 async function decide(id,d){await api(`/api/approvals/${id}/${d}`,{method:'POST'});loadApprovals()}

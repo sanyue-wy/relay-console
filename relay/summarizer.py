@@ -76,6 +76,9 @@ class Summarizer:
         s = self.main.get_session(sid)
         n = self.cfg.get("recent_rounds_raw", 3) * 2
         recent = self.main.messages(sid, limit=n)
-        raw = "\n".join(f"{'用户' if m['role'] == 'user' else '助手'}: {m['content'][:2000]}" for m in recent)
+        # Ghost messages：最近几轮以引用块回放，让新会话“看起来没有中断”
+        ghost = "\n\n".join(
+            f"> **{'用户' if m['role'] == 'user' else 'AI（' + (m.get('platform') or '') + '）'}**："
+            f"{m['content'][:800]}" for m in recent)
         summary = s.summary or "（暂无摘要，以下为最近对话原文）"
-        return f"{HANDOFF_HEADER}{summary}\n\n## 最近对话原文\n{raw}"
+        return f"{HANDOFF_HEADER}{summary}\n\n## 最近的对话（原文回放）\n{ghost}"

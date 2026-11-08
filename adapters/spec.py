@@ -141,6 +141,10 @@ class SelectorSet:
     last_reply: str
     new_chat: str | None = None
     upload_input: str | None = None
+    chat_list_item: str | None = None   # 侧栏历史会话条目（list_chats 用）
+    login_user: str | None = None       # 登录表单：账号输入框（凭据代填用）
+    login_pass: str | None = None       # 登录表单：密码输入框
+    login_submit: str | None = None     # 登录表单：提交按钮
     limit_texts: tuple[str, ...] = ()
     limit_status_codes: tuple[int, ...] = (429,)
 
@@ -148,8 +152,10 @@ class SelectorSet:
 class WebAdapter(Participant):
     """通用实现走 SelectorSet；平台特殊行为在子类覆盖对应方法。"""
 
-    def __init__(self, info: AdapterInfo, selectors: SelectorSet, page_provider: Callable):
+    def __init__(self, info: AdapterInfo, selectors: SelectorSet, page_provider: Callable,
+                 account: str | None = None):
         self.info, self.sel, self._page_provider = info, selectors, page_provider
+        self.account = account or "main"
 
     async def upload_file(self, path: str) -> bool:
         raise NotImplementedError

@@ -26,9 +26,9 @@ class _Base(GenericWebAdapter):
     NAME = ""
     MAX_INPUT = 30000
 
-    def __init__(self, page_provider, url: str | None = None):
+    def __init__(self, page_provider, url: str | None = None, account: str | None = None):
         info = AdapterInfo(self.ID, self.NAME, Kind.WEB, WEB_CAPS, max_input_chars=self.MAX_INPUT)
-        super().__init__(info, load_selectors(self.ID, url), page_provider)
+        super().__init__(info, load_selectors(self.ID, url), page_provider, account=account)
 
 
 @register("deepseek")

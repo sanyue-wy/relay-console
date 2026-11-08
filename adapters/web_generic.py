@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from .spec import (AdapterInfo, LimitReached, LimitState, LimitStatus, NotReady, Reply, SelectorBroken,
                    SelectorSet, Turn, WebAdapter)
@@ -25,7 +25,7 @@ class GenericWebAdapter(WebAdapter):
     async def start(self) -> None:
         if self.page and not self.page.is_closed():
             return
-        self.page = await self._page_provider(self.info.id, self.sel.url)
+        self.page = await self._page_provider(self.info.id, self.sel.url, self.account)
         self.page.on("response", self._on_response)
 
     async def stop(self) -> None:
@@ -167,3 +167,57 @@ class GenericWebAdapter(WebAdapter):
         await self.page.locator(self.sel.upload_input).first.set_input_files(path)
         await asyncio.sleep(2)
         return True
+
+    # ---------------- 历史会话发现（P1.2）
+    async def list_chats(self, limit: int = 30) -> list[dict]:
+        """从侧栏解析历史会话 [{title, url}]。选择器未配置或解析失败返回 []，不抛错。"""
+        if not self.sel.chat_list_item:
+            return []
+        await self.start()
+        out: list[dict] = []
+        try:
+            loc = self.page.locator(self.sel.chat_list_item)
+            n = min(await loc.count(), limit)
+            for i in range(n):
+                el = loc.nth(i)
+                try:
+                    title = (await el.inner_text()).strip().splitlines()[0] if await el.count() else ""
+                except Exception:
+                    title = ""
+                try:
+                    href = await el.get_attribute("href")
+                except Exception:
+                    href = None
+                url = urljoin(self.sel.url, href) if href else None
+                if title or url:
+                    out.append({"title": title or url, "url": url or self.page.url})
+        except Exception:
+            return []
+        return out
+
+    # ---------------- 凭据代填（P3.8，只由控制台侧调用；凭据不进日志）
+    async def fill_login(self, username: str, password: str) -> bool:
+        """把账号密码填进本平台登录表单并提交。页面上找不到登录表单返回 False。"""
+        await self.start()
+        pass_loc = self.page.locator(self.sel.login_pass or "input[type='password']").first
+        try:
+            if not await pass_loc.is_visible(timeout=2500):
+                return False
+            user_loc = self.page.locator(self.sel.login_user or
+                                         "input[type='text'], input[type='tel'], input[autocomplete*='username']").first
+            try:
+                if await user_loc.is_visible(timeout=1000):
+                    await user_loc.fill(username)
+            except Exception:
+                pass
+            await pass_loc.fill(password)
+            if self.sel.login_submit:
+                try:
+                    await self.page.locator(self.sel.login_submit).first.click(timeout=3000)
+                except Exception:
+                    await pass_loc.press("Enter")
+            else:
+                await pass_loc.press("Enter")
+            return True
+        except Exception:
+            return False

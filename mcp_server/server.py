@@ -77,6 +77,13 @@ def get_turn(arena_id: str, reason: str) -> dict:
 
 
 @mcp.tool()
+def get_session_status(session_id: str, reason: str) -> dict:
+    """申请读取某会话的状态：接力链、当前平台/账号、各平台冷却、摘要预览（不含对话正文）。
+    每次都要用户批准，批准后用 check_request + fetch_approved 取回。"""
+    return _call("POST", "/agent/requests", {"scope_type": "session", "session_id": session_id, "reason": reason})
+
+
+@mcp.tool()
 def check_request(request_id: str) -> dict:
     """查询申请状态：pending | approved | denied | expired。"""
     return _call("GET", f"/agent/requests/{request_id}")

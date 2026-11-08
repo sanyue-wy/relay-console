@@ -75,14 +75,25 @@ MAIN_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions(
   id TEXT PRIMARY KEY, title TEXT, participant_id TEXT DEFAULT 'user',
   current_platform TEXT, chat_ref TEXT, chain TEXT DEFAULT '[]',
-  summary_enc BLOB, summarized_upto INTEGER DEFAULT 0, created_at REAL);
+  summary_enc BLOB, summarized_upto INTEGER DEFAULT 0, created_at REAL,
+  account TEXT DEFAULT 'main');
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT,
   platform TEXT, content_enc BLOB, ts REAL);
 CREATE TABLE IF NOT EXISTS handoffs(
   id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, from_platform TEXT,
-  to_platform TEXT, reason TEXT, ts REAL);
+  to_platform TEXT, to_account TEXT, reason TEXT, ts REAL);
 """
+
+
+def _migrate_main(conn: sqlite3.Connection) -> None:
+    """旧库补列（表名/列名均为本模块常量，不来自外部输入）。"""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    if "account" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN account TEXT DEFAULT 'main'")
+    hcols = {r["name"] for r in conn.execute("PRAGMA table_info(handoffs)").fetchall()}
+    if "to_account" not in hcols:
+        conn.execute("ALTER TABLE handoffs ADD COLUMN to_account TEXT")
 
 
 @dataclass
@@ -95,18 +106,23 @@ class Session:
     chain: list[str]
     summary: str | None
     summarized_upto: int
+    account: str = "main"
 
 
 class MainPool:
     def __init__(self, data_dir: str | Path, fernet: Fernet):
         self.db = _DB(Path(data_dir) / "main.db", fernet, MAIN_SCHEMA)
+        with self.db.write() as conn:
+            _migrate_main(conn)
 
-    def create_session(self, title: str, platform: str, participant_id: str = "user") -> str:
+    def create_session(self, title: str, platform: str, participant_id: str = "user",
+                       account: str = "main") -> str:
         sid = _id("s")
         with self.db.write() as conn:
             conn.execute(
-                "INSERT INTO sessions(id,title,participant_id,current_platform,chain,created_at) VALUES(?,?,?,?,?,?)",
-                (sid, title, participant_id, platform, json.dumps([platform]), _now()),
+                "INSERT INTO sessions(id,title,participant_id,current_platform,chain,created_at,account) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (sid, title, participant_id, platform, json.dumps([platform]), _now(), account),
             )
         return sid
 
@@ -116,7 +132,8 @@ class MainPool:
         if not r:
             raise KeyError(sid)
         return Session(r["id"], r["title"], r["participant_id"], r["current_platform"], r["chat_ref"],
-                       json.loads(r["chain"]), self.db.dec(r["summary_enc"]), r["summarized_upto"])
+                       json.loads(r["chain"]), self.db.dec(r["summary_enc"]), r["summarized_upto"],
+                       r["account"] or "main")
 
     def list_sessions(self, participant_id: str = "user") -> list[dict]:
         with self.db.read() as conn:
@@ -128,16 +145,20 @@ class MainPool:
         with self.db.write() as conn:
             conn.execute("UPDATE sessions SET chat_ref=? WHERE id=?", (chat_ref, sid))
 
-    def switch_platform(self, sid: str, new_platform: str, reason: str) -> None:
+    def switch_platform(self, sid: str, new_platform: str, reason: str,
+                        new_account: str | None = None) -> None:
         with self.db.write() as conn:
             r = conn.execute("SELECT current_platform, chain FROM sessions WHERE id=?", (sid,)).fetchone()
             if not r:
                 raise KeyError(sid)
-            chain = json.loads(r["chain"]) + [new_platform]
-            conn.execute("UPDATE sessions SET current_platform=?, chat_ref=NULL, chain=? WHERE id=?",
-                         (new_platform, json.dumps(chain), sid))
-            conn.execute("INSERT INTO handoffs(session_id,from_platform,to_platform,reason,ts) VALUES(?,?,?,?,?)",
-                         (sid, r["current_platform"], new_platform, reason, _now()))
+            chain = json.loads(r["chain"])
+            if not chain or chain[-1] != new_platform:   # 同平台换账号不改接力链
+                chain = chain + [new_platform]
+            conn.execute("UPDATE sessions SET current_platform=?, account=?, chat_ref=NULL, chain=? WHERE id=?",
+                         (new_platform, new_account or "main", json.dumps(chain), sid))
+            conn.execute("INSERT INTO handoffs(session_id,from_platform,to_platform,to_account,reason,ts) "
+                         "VALUES(?,?,?,?,?,?)",
+                         (sid, r["current_platform"], new_platform, new_account or "main", reason, _now()))
 
     def add_message(self, sid: str, role: str, platform: str, content: str) -> int:
         with self.db.write() as conn:
@@ -355,6 +376,10 @@ class ArenaPool:
                 if not conn.execute("SELECT 1 FROM seats WHERE arena_id=? AND participant_id=?",
                                     (scope.get("arena_id", ""), pid)).fetchone():
                     raise PoolError("NOT_SEATED")
+            elif scope_type == "session":
+                # 会话是否真实存在由控制台层校验（双池无共享表，这里只查形态）
+                if not scope.get("session_id"):
+                    raise PoolError("BAD_SCOPE")
             else:
                 raise PoolError("BAD_SCOPE")
             recent = conn.execute("SELECT COUNT(*) c FROM read_requests WHERE participant_id=? AND created_at>?",
@@ -427,6 +452,9 @@ class ArenaPool:
             conn.execute("UPDATE tickets SET used=1 WHERE request_id=?", (rid,))
             scope = json.loads(r["scope"])
         self.audit(pid, "fetch", rid)
+        if r["scope_type"] == "session":
+            # 只回标记；状态/摘要预览由控制台层从主池组装（仍受本次批准约束）
+            return {"scope_type": "session", "session_id": scope.get("session_id")}
         if r["scope_type"] == "items":
             out = []
             for iid in scope["item_ids"]:

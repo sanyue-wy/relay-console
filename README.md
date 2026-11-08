@@ -41,25 +41,25 @@ relay-console/
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-copy config.example.yaml config.yaml      # 改 chrome_path、Hark 地址、接力顺序
-python scripts/setup_keys.py              # 输入 DeepSeek API key，存入 Windows 凭据管理器
-python -m pytest -q                       # 9 项自测应全部通过
+copy config.example.yaml config.yaml      # 改 chrome_path、Hark 地址、接力顺序、多账号
+python scripts/setup_keys.py              # 输入摘要 API key，存入 Windows 凭据管理器
+python -m pytest -q                       # 15 项自测应全部通过
 ```
 不需要 `playwright install`，程序连接你本机安装的 Chrome。
 
 ## 首次使用
-1. 逐个平台运行 `python scripts/probe.py deepseek`（kimi / doubao / gemini / hark 同理）。
-   会弹出该平台专用的 Chrome，**手动登录一次**，之后登录态留在 `profiles/<平台>`。
+1. 逐个平台运行 `python scripts/probe.py deepseek`（kimi / doubao / gemini / hark 同理，多账号加 `--account 账号名`）。
+   会弹出该平台专用的 Chrome，**手动登录一次**，之后登录态留在 `profiles/<平台>/<账号>`。
    脚本会打印每个选择器匹配到的数量；为 0 的按页面实际结构改 `adapters/selectors.yaml`。
-   加 `--send "你好"` 做一次完整收发测试。
+   加 `--send "你好"` 做一次完整收发测试；输出末尾还会试读侧栏历史会话条数（chat_list_item）。
 2. `python run_console.py`，用终端打印的带 token 地址打开控制台。
 
 > selectors.yaml 里的选择器是起步值，网页经常改版，以 probe 结果为准。
 
 ## 接力怎么工作
 - 每 4 轮（可配）用 API 增量更新一次本会话摘要，加密存主池；未摘要部分超过 `near_threshold_chars` 时也会提前生成（网页看不到额度百分比，以此近似“额度将尽前预生成摘要”的思路）。
-- 上限信号三路：页面文案（limit_texts）、网络 429、回复超时/截断。
-- 命中后：标记该平台冷却 → 按 relay_order 取下一个可用平台 → 开新对话 → 发送“交接包 + 你刚才那一问”。交接包超过该平台输入上限时改为上传 .md。
+- 上限信号三路：页面文案（limit_texts）、网络 429、回复超时/截断（`relay_on_truncation: true` 时截断也接力）。
+- 命中后：标记该**平台+账号**冷却 → **先在同平台换下一个可用账号**，没有再按 relay_order 换平台 → 开新对话 → 发送“交接包（结构化摘要 + 最近几轮引用块回放）+ 你刚才那一问”。交接包超过该平台输入上限时改为上传 .md。
 - API 不可用时用缓存摘要 + 最近几轮原文，交接不会卡住。
 
 ## 对抗模式
@@ -86,9 +86,15 @@ python -m pytest -q                       # 9 项自测应全部通过
 }
 ```
 3. 每个 Agent 一个令牌，可随时吊销；令牌绑定身份，只能看发给它的条目和它所在的对局。
+4. Agent 还可申请 `get_session_status`（会话接力链/各平台账号冷却/摘要预览，不含对话正文），同样逐次批准；MCP 只允许连本机回环控制台。
+
+## 多账号与凭据代填（可选）
+- `platforms.<pid>.accounts: [main, backup]` 为一个平台配多个账号，每个账号独立 Chrome profile、独立冷却；接力优先在同平台换账号，再换平台。
+- 想省掉手动登录：`python scripts/add_credential.py deepseek main` 把该账号的登录凭据存进 Windows 凭据管理器，并给平台开 `autofill: true`。打开平台若未登录会自动代填。
+- 凭据只在控制台进程里读出并注入登录表单：不落盘、不进日志、MCP/Agent 永远接触不到；不开 autofill 就完全不用。
 
 ## 安全要点
-- 不保存任何平台密码；只用你手动登录后留下的 Chrome profile。
+- 不保存任何平台密码；只用你手动登录后留下的 Chrome profile。**例外**：仅当你在 `add_credential` 里主动存入并开启 `autofill` 时，控制台会用凭据库代填登录表单；凭据仍不出本机凭据库、不进任何日志或 MCP 通道。
 - 主池、对抗池正文 AES 加密（Fernet），两把密钥存 Windows 凭据管理器。
 - 控制台只监听 127.0.0.1；`/api/*` 需要启动时生成的控制台令牌，Agent 令牌无法访问。
 - MCP 进程不读任何本地文件，只调用 `/agent/*`；每次读取需新批准，票据一次性、5 分钟过期；每分钟最多 10 次申请；全部写审计。

@@ -26,3 +26,10 @@ def load_config(path: str | Path | None = None) -> Config:
         d.mkdir(parents=True, exist_ok=True)
         cfg[key] = str(d)
     return cfg
+
+
+def platform_accounts(cfg, pid: str) -> list[str]:
+    """某平台配置的账号列表；未配置 accounts 时视为单账号 main。"""
+    p = cfg.get("platforms", {}).get(pid) or {}
+    accounts = p.get("accounts") or ["main"]
+    return list(accounts)

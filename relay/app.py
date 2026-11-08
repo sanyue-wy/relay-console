@@ -20,8 +20,8 @@ from adapters.spec import AdapterError
 
 from .arena import ArenaRunner
 from .browser import ChromeManager
-from .config import load_config
-from .crypto import CRED_ARENA, CRED_MAIN, get_api_key, get_fernet
+from .config import load_config, platform_accounts
+from .crypto import CRED_ARENA, CRED_MAIN, get_api_key, get_fernet, get_platform_credential
 from .relay_engine import RelayEngine
 from .storage import ArenaPool, MainPool, PoolError
 from .summarizer import Summarizer
@@ -102,10 +102,16 @@ C = [Depends(require_console)]
 class NewSession(BaseModel):
     title: str
     platform: str
+    account: str | None = None
 
 
 class Ask(BaseModel):
     text: str
+
+
+class OpenPlatform(BaseModel):
+    account: str | None = None
+    autofill: bool = False
 
 
 @app.get("/api/platforms", dependencies=C)
@@ -114,9 +120,41 @@ def platforms():
 
 
 @app.post("/api/platforms/{pid}/open", dependencies=C)
-async def open_platform(pid: str):
-    await S.engine.adapter(pid)          # 打开该平台的 Chrome，首次请手动登录
+async def open_platform(pid: str, b: OpenPlatform | None = None):
+    account = (b.account if b and b.account else "main")
+    ad = await S.engine.adapter(pid, account)     # 打开该平台该账号的 Chrome，首次请登录
+    # 可选：autofill 开启且凭据库里有这个账号的凭据时，代填登录表单（凭据不进日志）
+    if b and b.autofill and CFG["platforms"].get(pid, {}).get("autofill"):
+        if await ad.health():
+            return {"ok": True, "logged_in": True}
+        cred = get_platform_credential(pid, account)
+        if cred:
+            await ad.fill_login(cred[0], cred[1])
     return {"ok": True}
+
+
+@app.get("/api/platforms/{pid}/chats", dependencies=C)
+async def platform_chats(pid: str):
+    ad = await S.engine.adapter(pid)
+    return {"chats": await ad.list_chats()}
+
+
+class ResumeChat(BaseModel):
+    platform: str
+    url: str
+    title: str = ""
+    account: str | None = None
+
+
+@app.post("/api/sessions/resume", dependencies=C)
+def resume_session(b: ResumeChat):
+    """把平台侧的一个历史会话接进控制台：记录 chat_ref，之后提问会回到该会话。"""
+    if b.platform not in adapters.available():
+        raise HTTPException(400, "unknown platform")
+    account = b.account or (platform_accounts(CFG, b.platform) or ["main"])[0]
+    sid = S.main.create_session(b.title or f"{b.platform} 历史会话", b.platform, account=account)
+    S.main.set_chat_ref(sid, b.url)
+    return {"id": sid}
 
 
 @app.get("/api/sessions", dependencies=C)
@@ -128,14 +166,17 @@ def sessions():
 def new_session(b: NewSession):
     if b.platform not in adapters.available():
         raise HTTPException(400, "unknown platform")
-    return {"id": S.main.create_session(b.title, b.platform)}
+    accounts = platform_accounts(CFG, b.platform)
+    account = b.account if b.account in accounts else accounts[0]
+    return {"id": S.main.create_session(b.title, b.platform, account=account)}
 
 
 @app.get("/api/sessions/{sid}", dependencies=C)
 def session_detail(sid: str):
     s = S.main.get_session(sid)
-    return {"id": s.id, "title": s.title, "platform": s.current_platform, "chain": s.chain,
-            "summary": s.summary, "messages": S.main.messages(sid), "handoffs": S.main.handoffs(sid)}
+    return {"id": s.id, "title": s.title, "platform": s.current_platform, "account": s.account,
+            "chain": s.chain, "summary": s.summary, "messages": S.main.messages(sid),
+            "handoffs": S.main.handoffs(sid)}
 
 
 @app.post("/api/sessions/{sid}/ask", dependencies=C)
@@ -263,9 +304,10 @@ def arena_detail(aid: str):
 
 # ---------------------------------------------------------------- Agent 接口（MCP 只调这些）
 class ReadReq(BaseModel):
-    scope_type: str               # items | turn
+    scope_type: str               # items | turn | session
     item_ids: list[str] = []
     arena_id: str | None = None
+    session_id: str | None = None
     reason: str
 
 
@@ -281,7 +323,13 @@ def agent_pool(pid: str = Depends(require_agent)):
 
 @app.post("/agent/requests")
 def agent_request(b: ReadReq, pid: str = Depends(require_agent)):
-    scope = {"item_ids": b.item_ids} if b.scope_type == "items" else {"arena_id": b.arena_id}
+    if b.scope_type == "session":          # 会话存在性在这里校验（主池只有控制台能读）
+        try:
+            S.main.get_session(b.session_id or "")
+        except KeyError:
+            raise HTTPException(400, "session not found")
+    scope = {"item_ids": b.item_ids} if b.scope_type == "items" else \
+        {"arena_id": b.arena_id} if b.scope_type == "turn" else {"session_id": b.session_id}
     return {"request_id": S.arena.create_request(pid, b.scope_type, scope, b.reason), "status": "pending"}
 
 
@@ -292,7 +340,19 @@ def agent_check(rid: str, pid: str = Depends(require_agent)):
 
 @app.post("/agent/requests/{rid}/fetch")
 def agent_fetch(rid: str, pid: str = Depends(require_agent)):
-    return {"request_id": rid, "data": S.arena.fetch(pid, rid)}
+    data = S.arena.fetch(pid, rid)
+    if isinstance(data, dict) and data.get("scope_type") == "session":
+        data |= _session_status_payload(data["session_id"])
+        S.arena.audit(pid, "session_status", data["session_id"])
+    return {"request_id": rid, "data": data}
+
+
+def _session_status_payload(sid: str) -> dict:
+    """会话状态（只读、经批准）：接力链、各平台账号冷却、摘要预览。不含对话正文。"""
+    s = S.main.get_session(sid)
+    return {"title": s.title, "platform": s.current_platform, "account": s.account,
+            "chain": s.chain, "platforms": S.engine.platform_status(),
+            "summary_preview": (s.summary or "")[:600]}
 
 
 @app.post("/agent/arenas/{aid}/submit")

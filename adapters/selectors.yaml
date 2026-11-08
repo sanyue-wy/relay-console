@@ -2,6 +2,9 @@
 # ⚠ 以下选择器是起步值，网页会变，第一次使用前请运行：
 #     python scripts/probe.py <平台>
 # 按探测结果修正。字段含义见 adapters/spec.py 的 SelectorSet。
+# 可选字段：
+#   chat_list_item         侧栏历史会话条目（平台历史恢复用，见 probe 输出）
+#   login_user/login_pass/login_submit   登录表单三件套（autofill 凭据代填用）
 
 deepseek:
   url: https://chat.deepseek.com/
@@ -11,7 +14,9 @@ deepseek:
   last_reply: ".ds-markdown"
   new_chat: null                     # null = 直接打开首页开新对话
   upload_input: "input[type=file]"
-  limit_texts: ["服务器繁忙", "达到上限", "请稍后再试", "Server busy", "limit"]
+  chat_list_item: "a[href*='/a/chat/s/']"
+  limit_texts: ["服务器繁忙", "达到上限", "请稍后再试", "Server busy", "limit",
+                "rate limit", "too many requests"]
   limit_status_codes: [429]
 
 doubao:
@@ -22,7 +27,8 @@ doubao:
   last_reply: "[data-testid='receive_message']"
   new_chat: null
   upload_input: "input[type=file]"
-  limit_texts: ["次数已用完", "达到上限", "明天再来"]
+  chat_list_item: "a[href*='/chat/']"
+  limit_texts: ["次数已用完", "达到上限", "明天再来", "limit reached", "try again later"]
   limit_status_codes: [429]
 
 kimi:
@@ -33,7 +39,8 @@ kimi:
   last_reply: ".markdown"
   new_chat: null
   upload_input: "input[type=file]"
-  limit_texts: ["已达上限", "额度已用完", "稍后再试"]
+  chat_list_item: "a[href*='/chat/']"
+  limit_texts: ["已达上限", "额度已用完", "稍后再试", "rate limit", "quota"]
   limit_status_codes: [429]
 
 gemini:
@@ -44,6 +51,7 @@ gemini:
   last_reply: "message-content"
   new_chat: null
   upload_input: "input[type=file]"
+  chat_list_item: "a[href*='/app/']"
   limit_texts: ["You've reached your limit", "reached your limit", "已达到上限"]
   limit_status_codes: [429]
 
@@ -55,5 +63,6 @@ hark:
   last_reply: "[data-role='assistant']"
   new_chat: null
   upload_input: "input[type=file]"
+  chat_list_item: null
   limit_texts: ["limit", "上限"]
   limit_status_codes: [429]

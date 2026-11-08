@@ -100,11 +100,9 @@ def test_policy_skips_cooldown():
 
 
 class _Fake(Participant):
-    replies: dict = {}
-
-    def __init__(self, pid, exhausted):
+    def __init__(self, pid, exhausted, truncated=False):
         self.info = AdapterInfo(pid, pid, Kind.WEB, Cap.NEW_CHAT)
-        self.exhausted, self.sent = exhausted, []
+        self.exhausted, self.truncated, self.sent = exhausted, truncated, []
 
     async def start(self): ...
     async def stop(self): ...
@@ -117,7 +115,7 @@ class _Fake(Participant):
         self.sent.append(turn.content)
 
     async def receive(self, timeout=180):
-        return Reply(f"{self.info.id}:ok", True, 1, f"https://{self.info.id}/c/1")
+        return Reply(f"{self.info.id}:ok", not self.truncated, 1, f"https://{self.info.id}/c/1")
 
 
 class _Summ:
@@ -129,13 +127,86 @@ def test_engine_relays_on_limit(pools):
     main, _ = pools
     cfg = {"relay_order": ["deepseek", "kimi"], "platforms": {}, "default_cooldown_minutes": 1}
     eng = RelayEngine(cfg, main, browser=None, summarizer=_Summ())
-    eng._adapters = {"deepseek": _Fake("deepseek", True), "kimi": _Fake("kimi", False)}
+    eng._adapters = {("deepseek", "main"): _Fake("deepseek", True), ("kimi", "main"): _Fake("kimi", False)}
     sid = main.create_session("t", "deepseek")
     r = asyncio.run(eng.ask(sid, "继续讲"))
-    assert r["platform"] == "kimi" and r["relays"][0]["to"] == "kimi"
-    sent = eng._adapters["kimi"].sent[0]
+    assert r["platform"] == "kimi" and r["relays"][0]["to"] == "kimi:main"
+    sent = eng._adapters[("kimi", "main")].sent[0]
     assert sent.startswith("【会话接力】") and sent.endswith("继续讲")
     assert main.get_session(sid).chain == ["deepseek", "kimi"]
+
+
+def test_handoff_package_ghost_replay(pools):
+    from relay.summarizer import Summarizer
+    main, _ = pools
+    s = Summarizer({"summary": {"recent_rounds_raw": 3}}, main, api_key=None)
+    sid = main.create_session("t", "deepseek")
+    main.add_message(sid, "user", "deepseek", "你好")
+    main.add_message(sid, "assistant", "deepseek", "你好，我在")
+    pkg = asyncio.run(s.handoff_package(sid))
+    assert "## 最近的对话（原文回放）" in pkg
+    assert "> **用户**：你好" in pkg and "> **AI（deepseek）**：你好，我在" in pkg
+
+
+def test_account_rotation_same_platform(pools):
+    main, _ = pools
+    cfg = {"relay_order": ["deepseek"], "platforms": {"deepseek": {"accounts": ["a1", "a2"]}},
+           "default_cooldown_minutes": 1}
+    eng = RelayEngine(cfg, main, browser=None, summarizer=_Summ())
+    eng._adapters = {("deepseek", "a1"): _Fake("deepseek", True), ("deepseek", "a2"): _Fake("deepseek", False)}
+    sid = main.create_session("t", "deepseek", account="a1")
+    r = asyncio.run(eng.ask(sid, "继续"))
+    assert r["platform"] == "deepseek" and r["account"] == "a2"   # 优先同平台换账号
+    assert r["relays"][0] == {"from": "deepseek:a1", "to": "deepseek:a2", "reason": "已达上限"}
+    assert main.get_session(sid).chain == ["deepseek"]            # 换账号不改接力链
+    assert ("deepseek", "a1") in eng.cooldowns
+    s = main.get_session(sid)
+    assert s.account == "a2"
+
+
+def test_relay_on_truncation(pools):
+    main, _ = pools
+    cfg = {"relay_order": ["deepseek", "kimi"], "platforms": {},
+           "default_cooldown_minutes": 1, "relay_on_truncation": True}
+    eng = RelayEngine(cfg, main, browser=None, summarizer=_Summ())
+    eng._adapters = {("deepseek", "main"): _Fake("deepseek", False, truncated=True),
+                     ("kimi", "main"): _Fake("kimi", False)}
+    sid = main.create_session("t", "deepseek")
+    r = asyncio.run(eng.ask(sid, "写长文"))
+    assert r["platform"] == "kimi" and "截断" in r["relays"][0]["reason"]
+
+    eng2 = RelayEngine({**cfg, "relay_on_truncation": False}, main, browser=None, summarizer=_Summ())
+    eng2._adapters = {("deepseek", "main"): _Fake("deepseek", False, truncated=True),
+                      ("kimi", "main"): _Fake("kimi", False)}
+    sid2 = main.create_session("t2", "deepseek")
+    r2 = asyncio.run(eng2.ask(sid2, "写长文"))
+    assert r2["platform"] == "deepseek" and r2["finished"] is False   # 开关关闭：截断不接力
+
+
+def test_session_scope_approval(pools):
+    main, arena = pools
+    sid = main.create_session("t", "deepseek")
+    pid, _ = arena.create_agent("s")
+    with pytest.raises(PoolError, match="BAD_SCOPE"):
+        arena.create_request(pid, "session", {}, "r")
+    rid = arena.create_request(pid, "session", {"session_id": sid}, "查状态")
+    arena.decide(rid, True)
+    data = arena.fetch(pid, rid)
+    assert data == {"scope_type": "session", "session_id": sid}
+    with pytest.raises(PoolError, match="TICKET_USED"):
+        arena.fetch(pid, rid)
+
+
+def test_platform_credential_roundtrip(monkeypatch):
+    import relay.crypto as crypto
+    store = {}
+    monkeypatch.setattr(crypto.keyring, "get_password", lambda s, n: store.get(n))
+    monkeypatch.setattr(crypto.keyring, "set_password", lambda s, n, v: store.__setitem__(n, v))
+    user, secret = "user1", "p" + str(1)
+    crypto.set_platform_credential("deepseek", "main", user, secret)
+    assert crypto.get_platform_credential("deepseek", "main") == (user, secret)
+    assert crypto.has_platform_credential("deepseek", "main")
+    assert crypto.get_platform_credential("deepseek", "other") is None
 
 
 # ---------------- 主动阈值预生成

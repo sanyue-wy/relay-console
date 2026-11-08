@@ -9,6 +9,7 @@
 - list_pool()：可见条目的 ID 和标题，不含内容，无需授权。
 - request_read(item_ids, reason)：申请读取条目。reason 必填，用户会看到。返回 request_id。
 - get_turn(arena_id, reason)：申请读取对局中轮到你的题目。返回 request_id。
+- get_session_status(session_id, reason)：申请读取某会话的状态（接力链/各平台账号冷却/摘要预览，不含对话正文）。同样需批准。
 - check_request(request_id)：pending | approved | denied | expired。
 - fetch_approved(request_id)：取回已批准内容。一次性票据，批准后 5 分钟内有效。
 - submit_turn(arena_id, content)：提交本轮发言。必须先读到题目。

@@ -15,14 +15,16 @@ from relay.browser import ChromeManager  # noqa: E402
 from relay.config import load_config  # noqa: E402
 
 
-async def main(pid: str, send: str | None):
+async def main(pid: str, send: str | None, account: str | None):
     cfg = load_config()
     br = ChromeManager(cfg)
-    ad = adapters.create(pid, page_provider=br.page, url=cfg["platforms"].get(pid, {}).get("url"))
+    ad = adapters.create(pid, page_provider=br.page,
+                         url=cfg["platforms"].get(pid, {}).get("url"), account=account)
     await ad.start()
-    input(f"[{pid}] 如未登录，请在打开的 Chrome 里登录，完成后按回车继续...")
+    input(f"[{pid}:{ad.account}] 如未登录，请在打开的 Chrome 里登录，完成后按回车继续...")
     sel = ad.sel
-    for field in ("input", "send_button", "stop_button", "last_reply", "new_chat", "upload_input"):
+    for field in ("input", "send_button", "stop_button", "last_reply", "new_chat", "upload_input",
+                  "chat_list_item", "login_user", "login_pass", "login_submit"):
         css = getattr(sel, field)
         n = await ad.page.locator(css).count() if css else "-"
         print(f"  {field:13s} {str(n):>4}  {css}")
@@ -31,6 +33,8 @@ async def main(pid: str, send: str | None):
         await ad.send(Turn("user", send, "user"))
         r = await ad.receive(120)
         print("  reply:", r.text[:300], "| finished:", r.finished)
+    chats = await ad.list_chats()
+    print("  chats:", len(chats), "个历史会话（前 3：", [c["title"][:12] for c in chats[:3]], "）")
     await br.close()
 
 
@@ -38,5 +42,6 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("platform", choices=adapters.available())
     ap.add_argument("--send")
+    ap.add_argument("--account", help="多账号时指定账号名（对应 config.yaml platforms.<pid>.accounts）")
     a = ap.parse_args()
-    asyncio.run(main(a.platform, a.send))
+    asyncio.run(main(a.platform, a.send, a.account))

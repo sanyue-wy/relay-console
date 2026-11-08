@@ -13,16 +13,19 @@ summary:
   timeout_seconds: 25
   near_threshold_chars: 60000   # 未摘要部分达到该字符数时提前生成摘要（0 关闭）；网页看不到额度百分比，用它近似"85% 阈值预生成"
 
-# 接力顺序：当前平台触发上限后，按此顺序找下一个可用平台
+# 接力顺序：当前平台触发上限后，先在同平台换下一个可用账号，再按此顺序换平台
 relay_order: [deepseek, kimi, doubao, gemini, hark]
 default_cooldown_minutes: 180
+relay_on_truncation: false     # true 时回复被截断（非上限）也触发接力，长文场景可开
 
 platforms:
-  deepseek: {port: 9301}
-  doubao:   {port: 9302}
-  kimi:     {port: 9303}
-  gemini:   {port: 9304}
-  hark:     {port: 9305, url: "https://YOUR-HARK-WEB-URL"}   # 填写 Hark 网页版地址
+  # accounts: 同平台多账号（每个账号独立 Chrome profile 与登录态，接力时优先在同平台换账号）
+  # autofill: true 时打开平台若未登录，用凭据库里的账号密码代填登录表单（凭据用 scripts/add_credential.py 存入）
+  deepseek: {port: 9301, accounts: [main]}
+  doubao:   {port: 9302, accounts: [main]}
+  kimi:     {port: 9303, accounts: [main]}
+  gemini:   {port: 9304, accounts: [main]}
+  hark:     {port: 9305, url: "https://YOUR-HARK-WEB-URL", accounts: [main]}   # 填写 Hark 网页版地址
 
 arena:
   agent_turn_timeout: 600       # 等 Agent 交回发言的秒数
