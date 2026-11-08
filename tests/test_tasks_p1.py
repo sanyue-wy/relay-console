@@ -5,10 +5,12 @@ from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
+from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import relay.app as appmod  # noqa: E402
 from adapters.spec import NotReady  # noqa: E402
 from relay.browser import ChromeManager  # noqa: E402
 from relay.config import Config  # noqa: E402
@@ -88,3 +90,20 @@ def test_t7_not_ready_does_not_switch_platform(tmp_path):
     assert s.current_platform == "deepseek"      # 没有被切到 kimi
     assert s.account == "main"
     assert main.messages(sid) == []              # 用户消息已回滚
+
+
+# ---------------- T8：NOT_FOUND → 404；内部 KeyError → 500
+def test_t8_not_found_404_and_keyerror_500(tmp_path, monkeypatch):
+    keys = {}
+    monkeypatch.setattr(appmod, "get_fernet", lambda n: keys.setdefault(n, Fernet(Fernet.generate_key())))
+    monkeypatch.setattr(appmod, "get_api_key", lambda: None)
+    monkeypatch.setitem(appmod.CFG, "data_dir", str(tmp_path))
+    with TestClient(appmod.app, base_url="http://127.0.0.1", raise_server_exceptions=False) as c:
+        H = {"X-Console-Token": appmod.CONSOLE_TOKEN}
+        r = c.get("/api/sessions/s_nope", headers=H)
+        assert r.status_code == 404 and r.json()["error"] == "NOT_FOUND"
+
+        monkeypatch.setattr(appmod.S.arena, "list_agents",
+                            lambda: (_ for _ in ()).throw(KeyError("boom")))
+        r = c.get("/api/agents", headers=H)
+        assert r.status_code == 500 and r.json()["error"] == "KeyError"

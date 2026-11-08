@@ -65,7 +65,7 @@ def test_resume_chat_and_session_status(tmp_path, monkeypatch):
                        json={"scope_type": "session", "session_id": "s_none", "reason": "r"}).json()["request_id"]
         c.post(f"/api/approvals/{ghost}/approve", headers=H)
         r = c.post(f"/agent/requests/{ghost}/fetch", headers=A)
-        assert r.status_code == 400 and r.json()["error"] == "NOT_FOUND"
+        assert r.status_code == 404 and r.json()["error"] == "NOT_FOUND"
         rid = c.post("/agent/requests", headers=A,
                      json={"scope_type": "session", "session_id": sid, "reason": "r"}).json()["request_id"]
         assert c.post(f"/agent/requests/{rid}/fetch", headers=A).json()["error"] == "NOT_APPROVED"

@@ -134,7 +134,7 @@ class MainPool:
         with self.db.read() as conn:
             r = conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
         if not r:
-            raise KeyError(sid)
+            raise PoolError("NOT_FOUND", sid)
         return Session(r["id"], r["title"], r["participant_id"], r["current_platform"], r["chat_ref"],
                        json.loads(r["chain"]), self.db.dec(r["summary_enc"]), r["summarized_upto"],
                        r["account"] or "main")
@@ -154,7 +154,7 @@ class MainPool:
         with self.db.write() as conn:
             r = conn.execute("SELECT current_platform, chain FROM sessions WHERE id=?", (sid,)).fetchone()
             if not r:
-                raise KeyError(sid)
+                raise PoolError("NOT_FOUND", sid)
             chain = json.loads(r["chain"])
             if not chain or chain[-1] != new_platform:   # 同平台换账号不改接力链
                 chain = chain + [new_platform]

@@ -132,14 +132,10 @@ async def _security_headers(request: Request, call_next):
     return resp
 
 
-@app.exception_handler(KeyError)
-async def _key_err(_, e: KeyError):
-    return JSONResponse({"error": "NOT_FOUND", "detail": str(e)}, status_code=404)
-
-
 @app.exception_handler(PoolError)
 async def _pool_err(_, e: PoolError):
-    return JSONResponse({"error": e.code, "detail": str(e)}, status_code=400)
+    status = 404 if e.code == "NOT_FOUND" else 400
+    return JSONResponse({"error": e.code, "detail": str(e)}, status_code=status)
 
 
 @app.exception_handler(AdapterError)
@@ -550,10 +546,7 @@ def _session_status_payload(sid: str) -> dict:
 
     摘要由对话正文生成，可能包含要点；这里只给前 600 字，不是“绝不包含任何正文”。
     """
-    try:
-        s = S.main.get_session(sid)
-    except KeyError as exc:
-        raise PoolError("NOT_FOUND", sid) from exc
+    s = S.main.get_session(sid)     # 不存在时抛 PoolError("NOT_FOUND") → 404
     return {"title": s.title, "platform": s.current_platform, "account": s.account,
             "chain": s.chain, "platforms": S.engine.platform_status(),
             "summary_preview": (s.summary or "")[:600]}
