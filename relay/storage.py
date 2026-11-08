@@ -205,7 +205,6 @@ ARENA_SCHEMA = """
 CREATE TABLE IF NOT EXISTS items(
   id TEXT PRIMARY KEY, title TEXT, content_enc BLOB, audience TEXT DEFAULT '*',
   session_id TEXT, published_at REAL, content_hash TEXT);
-CREATE UNIQUE INDEX IF NOT EXISTS items_session_uq ON items(session_id) WHERE session_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS agents(
   participant_id TEXT PRIMARY KEY, display_name TEXT, token_hash TEXT UNIQUE, created_at REAL, revoked INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS arenas(
@@ -245,9 +244,23 @@ def _migrate_arena(conn: sqlite3.Connection) -> None:
     tcols = {r["name"] for r in conn.execute("PRAGMA table_info(tickets)").fetchall()}
     if "scope_hash" not in tcols:
         conn.execute("ALTER TABLE tickets ADD COLUMN scope_hash TEXT")
-    # 会话池与读取池 1:1：老库可能已有重复 session_id，先保留最新一条再建唯一索引
-    conn.execute("DELETE FROM items WHERE session_id IS NOT NULL AND rowid NOT IN ("
-                 "SELECT MAX(rowid) FROM items WHERE session_id IS NOT NULL GROUP BY session_id)")
+    # 会话池与读取池 1:1：老库可能已有重复 session_id。
+    # 先备份被删的那几行并写审计，再保留最新一条、建唯一索引——不静默丢数据。
+    conn.execute("CREATE TABLE IF NOT EXISTS items_dup_backup("
+                 "id TEXT PRIMARY KEY, title TEXT, content_enc BLOB, audience TEXT DEFAULT '*', "
+                 "session_id TEXT, published_at REAL, content_hash TEXT)")
+    dup_ids = [r["id"] for r in conn.execute(
+        "SELECT id FROM items WHERE session_id IS NOT NULL AND rowid NOT IN ("
+        "SELECT MAX(rowid) FROM items WHERE session_id IS NOT NULL GROUP BY session_id)").fetchall()]
+    if dup_ids:
+        conn.execute("INSERT OR IGNORE INTO items_dup_backup "
+                     "SELECT * FROM items WHERE session_id IS NOT NULL AND rowid NOT IN ("
+                     "SELECT MAX(rowid) FROM items WHERE session_id IS NOT NULL GROUP BY session_id)")
+        conn.execute("INSERT INTO audit(ts,actor,action,detail) VALUES(?,?,?,?)",
+                     (_now(), "system", "items_dup_backup",
+                      json.dumps({"ids": dup_ids}, ensure_ascii=False)))
+        conn.execute("DELETE FROM items WHERE session_id IS NOT NULL AND rowid NOT IN ("
+                     "SELECT MAX(rowid) FROM items WHERE session_id IS NOT NULL GROUP BY session_id)")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS items_session_uq "
                  "ON items(session_id) WHERE session_id IS NOT NULL")
 

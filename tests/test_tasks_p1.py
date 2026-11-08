@@ -1,5 +1,6 @@
 """P1 任务回归测试（T5-T10）。"""
 import asyncio
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -107,3 +108,26 @@ def test_t8_not_found_404_and_keyerror_500(tmp_path, monkeypatch):
                             lambda: (_ for _ in ()).throw(KeyError("boom")))
         r = c.get("/api/agents", headers=H)
         assert r.status_code == 500 and r.json()["error"] == "KeyError"
+
+
+# ---------------- T9：迁移去重前先备份并审计
+def test_t9_duplicate_items_backed_up(tmp_path):
+    fernet = Fernet(Fernet.generate_key())
+    conn = sqlite3.connect(str(tmp_path / "arena.db"))
+    conn.execute("CREATE TABLE items(id TEXT PRIMARY KEY, title TEXT, content_enc BLOB, "
+                 "audience TEXT DEFAULT '*', session_id TEXT, published_at REAL)")
+    for iid, ts in (("a1", 1.0), ("a2", 2.0)):
+        conn.execute("INSERT INTO items VALUES(?,?,?,?,?,?)",
+                     (iid, iid, fernet.encrypt(b"x"), "*", "s1", ts))
+    conn.commit()
+    conn.close()
+
+    pool = ArenaPool(tmp_path, fernet)
+    with pool.db.read() as c:
+        kept = [r["id"] for r in c.execute(
+            "SELECT id FROM items WHERE session_id='s1'").fetchall()]
+        backup = [r["id"] for r in c.execute("SELECT id FROM items_dup_backup").fetchall()]
+        audit = c.execute("SELECT detail FROM audit WHERE action='items_dup_backup'").fetchone()
+    assert kept == ["a2"]                 # 保留最新一条
+    assert backup == ["a1"]               # 被删的先备份
+    assert audit and "a1" in audit["detail"]
