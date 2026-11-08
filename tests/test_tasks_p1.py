@@ -131,3 +131,17 @@ def test_t9_duplicate_items_backed_up(tmp_path):
     assert kept == ["a2"]                 # 保留最新一条
     assert backup == ["a1"]               # 被删的先备份
     assert audit and "a1" in audit["detail"]
+
+
+# ---------------- T10：session 批准绑定摘要版本
+def test_t10_session_version_binding(tmp_path):
+    arena = ArenaPool(tmp_path, Fernet(Fernet.generate_key()), 300)
+    rid = arena.create_request("agent:a", "session", {"session_id": "s1"}, "r")
+    arena.decide(rid, True, session_version=2)
+    with pytest.raises(PoolError, match="CONTENT_CHANGED"):
+        arena.fetch("agent:a", rid, session_version=3)
+
+    rid2 = arena.create_request("agent:a", "session", {"session_id": "s1"}, "r")
+    arena.decide(rid2, True, session_version=3)
+    data = arena.fetch("agent:a", rid2, session_version=3)
+    assert data == {"scope_type": "session", "session_id": "s1"}

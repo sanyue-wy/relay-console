@@ -349,8 +349,19 @@ def approvals():
 def decide(rid: str, decision: str):
     if decision not in ("approve", "deny"):
         raise HTTPException(400)
-    S.arena.decide(rid, decision == "approve")
+    info = S.arena.request_info(rid)
+    version = (_session_version(info["scope"]["session_id"])
+               if info["scope_type"] == "session" else None)
+    S.arena.decide(rid, decision == "approve", session_version=version)
     return {"ok": True}
+
+
+def _session_version(sid: str) -> int | None:
+    """取会话摘要版本；会话不在了就返回 None（批准仍可完成，fetch 阶段再报 NOT_FOUND）。"""
+    try:
+        return S.main.get_session(sid).summarized_upto
+    except PoolError:
+        return None
 
 
 @app.post("/api/arenas/{aid}/approve-round", dependencies=C)
@@ -534,7 +545,10 @@ def agent_check(rid: str, pid: str = Depends(require_agent)):
 
 @app.post("/agent/requests/{rid}/fetch")
 def agent_fetch(rid: str, pid: str = Depends(require_agent)):
-    data = S.arena.fetch(pid, rid)
+    info = S.arena.request_info(rid, pid)
+    version = (_session_version(info["scope"]["session_id"])
+               if info["scope_type"] == "session" else None)
+    data = S.arena.fetch(pid, rid, session_version=version)
     if isinstance(data, dict) and data.get("scope_type") == "session":
         data |= _session_status_payload(data["session_id"])
         S.arena.audit(pid, "session_status", data["session_id"])

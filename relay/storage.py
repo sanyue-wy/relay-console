@@ -502,7 +502,21 @@ class ArenaPool:
             parts.append(f"{iid}:{r['content_hash'] if r else ''}")
         return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
-    def decide(self, rid: str, approve: bool, actor: str = "user") -> None:
+    def request_info(self, rid: str, pid: str | None = None) -> dict:
+        """读一条申请（scope 已解析）；pid 给定时同时校验归属。"""
+        with self.db.read() as conn:
+            if pid is None:
+                r = conn.execute("SELECT participant_id,scope_type,scope,status FROM read_requests "
+                                 "WHERE id=?", (rid,)).fetchone()
+            else:
+                r = conn.execute("SELECT participant_id,scope_type,scope,status FROM read_requests "
+                                 "WHERE id=? AND participant_id=?", (rid, pid)).fetchone()
+        if not r:
+            raise PoolError("NOT_FOUND")
+        return dict(r) | {"scope": json.loads(r["scope"])}
+
+    def decide(self, rid: str, approve: bool, actor: str = "user",
+               session_version: int | None = None) -> None:
         with self.db.write() as conn:
             r = conn.execute("SELECT status,scope_type,scope FROM read_requests WHERE id=?", (rid,)).fetchone()
             if not r or r["status"] != "pending":
@@ -511,9 +525,13 @@ class ArenaPool:
                          ("approved" if approve else "denied", _now(), rid))
             if approve:
                 scope = json.loads(r["scope"])
-                # 把“批准时看到的内容版本”写进票据；fetch 时对不上就拒绝
-                shash = (self._items_scope_hash(conn, scope.get("item_ids") or [])
-                         if r["scope_type"] == "items" else None)
+                # 把“批准时看到的内容/摘要版本”写进票据；fetch 时对不上就拒绝
+                if r["scope_type"] == "items":
+                    shash = self._items_scope_hash(conn, scope.get("item_ids") or [])
+                elif r["scope_type"] == "session" and session_version is not None:
+                    shash = f"session:{session_version}"
+                else:
+                    shash = None
                 conn.execute("INSERT INTO tickets(request_id,expires_at,used,scope_hash) VALUES(?,?,0,?)",
                              (rid, _now() + self.ticket_ttl, shash))
         self.audit(actor, "approve" if approve else "deny", rid)
@@ -538,7 +556,7 @@ class ArenaPool:
                 return "expired"
         return r["status"]
 
-    def fetch(self, pid: str, rid: str) -> list[dict] | dict:
+    def fetch(self, pid: str, rid: str, session_version: int | None = None) -> list[dict] | dict:
         with self.db.write() as conn:
             r = conn.execute("SELECT scope_type,scope,status FROM read_requests WHERE id=? AND participant_id=?",
                              (rid, pid)).fetchone()
@@ -556,6 +574,10 @@ class ArenaPool:
                 # 批准后条目被再次发布（原位更新）→ 内容已不是你审过的那一版
                 if self._items_scope_hash(conn, scope.get("item_ids") or []) != t["scope_hash"]:
                     raise PoolError("CONTENT_CHANGED", "批准后内容已变化，请重新发布并重新批准")
+            if r["scope_type"] == "session" and t["scope_hash"]:
+                # 摘要在你批准后又被更新过 → 预览内容已不是你审过的那一版
+                if session_version is None or f"session:{session_version}" != t["scope_hash"]:
+                    raise PoolError("CONTENT_CHANGED", "会话摘要在批准后已更新，请重新批准")
             conn.execute("UPDATE tickets SET used=1 WHERE request_id=?", (rid,))
         self.audit(pid, "fetch", rid)
         if r["scope_type"] == "session":
