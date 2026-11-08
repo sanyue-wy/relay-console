@@ -225,6 +225,80 @@ async function togglePlatform(pid, on) {
   } catch (e) { alert(e.message); loadAccounts(); }
 }
 
+/* ---------------- 设置页：浏览器承载（B3） ---------------- */
+const FP_DESC = {
+  chrome: '本工程自己拉起 Chrome + 独立 profile（指纹不隔离），登录态存在 profiles/ 目录。',
+  adspower: '需要本机已装 AdsPower，并在客户端的 设置 → API 里开启本地 API（密钥在 设置 → API 生成）。',
+  ovobrowser: '需要本机已装 ovoBrowser，并在客户端的 设置 → 本地 API 里开启。',
+};
+let fpEnvList = [];
+async function loadFingerprint() {
+  const s = await api('/api/settings/fingerprint');
+  document.querySelectorAll('input[name="fpBackend"]').forEach(r => { r.checked = r.value === s.backend; });
+  $('fpDesc').textContent = FP_DESC[s.backend] || '';
+  $('fpApiBase').value = s.api_base || '';
+  $('fpTimeout').value = s.startup_timeout_seconds ?? 90;
+  $('fpKey').value = '';
+  $('fpKeyState').textContent = s.has_key ? '已保存（密钥存系统凭据库，不回显）' : '未保存';
+  if (!$('fpMapping').dataset.rendered) renderFpMapping(s.profiles || {}, []);
+}
+function fpBackendPick() {
+  const v = document.querySelector('input[name="fpBackend"]:checked').value;
+  $('fpDesc').textContent = FP_DESC[v] || '';
+}
+function renderFpMapping(profiles, envs) {
+  /* 行 = 平台:账号；列 = 环境下拉（环境名 + ID）。envs 为空时先显示已保存的值。 */
+  const rows = [];
+  (cache.platforms || []).forEach(p => (p.accounts || []).forEach(a => {
+    const key = `${p.id}|${a.account}`;
+    const cur = (profiles[p.id] || {})[a.account] || '';
+    const opts = (envs && envs.length)
+      ? envs.map(e => `<option value="${esc(e.id)}" ${e.id === cur ? 'selected' : ''}>${esc(e.name || '（未命名）')}（${esc(e.id)}）</option>`).join('')
+        + `<option value="" ${cur ? '' : 'selected'}>（不使用指纹环境）</option>`
+      : `<option value="${esc(cur)}">${esc(cur || '（先「测试并读取环境」）')}</option>`;
+    rows.push(`<div class="row" style="margin:2px 0">
+      <span class="sub" style="width:170px">${esc(p.id)}:${esc(a.account)}</span>
+      <select id="fpenv_${esc(key)}" style="flex:1">${opts}</select></div>`);
+  }));
+  $('fpMapping').innerHTML = rows.join('') || '<span class="empty">还没有平台与账号，先到「平台与账号」页登记</span>';
+  $('fpMapping').dataset.rendered = '1';
+}
+async function fpTest() {
+  const backend = document.querySelector('input[name="fpBackend"]:checked').value;
+  $('fpMsg').textContent = '测试中…';
+  try {
+    const body = { backend, api_base: $('fpApiBase').value.trim(), api_key: $('fpKey').value.trim() || null };
+    const r = await api('/api/settings/fingerprint/test', { method: 'POST', body: JSON.stringify(body) });
+    if (!r.ok) { $('fpMsg').textContent = '失败：' + r.error; return; }
+    fpEnvList = r.profiles;
+    $('fpMsg').textContent = `读取到 ${r.profiles.length} 个环境`;
+    await loadPlatformsLite();      // 保证 cache.platforms 最新
+    renderFpMapping((await api('/api/settings/fingerprint')).profiles, fpEnvList);
+  } catch (e) { $('fpMsg').textContent = '失败：' + e.message; }
+}
+async function fpSave() {
+  const backend = document.querySelector('input[name="fpBackend"]:checked').value;
+  const profiles = {};
+  document.querySelectorAll('[id^="fpenv_"]').forEach(sel => {
+    const [pid, account] = sel.id.slice(6).split('|');
+    if (sel.value) (profiles[pid] = profiles[pid] || {})[account] = sel.value;
+  });
+  const body = { backend, api_base: $('fpApiBase').value.trim(),
+    startup_timeout_seconds: +$('fpTimeout').value || 90, profiles };
+  const k = $('fpKey').value.trim();
+  if (k) body.api_key = k;          // 密钥只写不读
+  try {
+    const r = await api('/api/settings/fingerprint', { method: 'PUT', body: JSON.stringify(body) });
+    $('fpKey').value = '';
+    $('fpKeyState').textContent = (await api('/api/settings/fingerprint')).has_key ? '已保存（密钥存系统凭据库，不回显）' : '未保存';
+    $('fpMsg').textContent = r.needs_restart ? '已保存；浏览器承载变化请用托盘重启后生效' : '已保存';
+    renderFpMapping(r.profiles, fpEnvList);
+  } catch (e) {
+    const errs = e.detail && e.detail.errors;
+    $('fpMsg').textContent = errs ? errs.map(x => x.message).join('；') : ('失败：' + e.message);
+  }
+}
+
 /* ---------------- 设置页：Chrome 路径（B2） ---------------- */
 async function chromeDetect() {
   try {
@@ -282,6 +356,7 @@ async function loadSettings() {
   $('setChrome').value = s.chrome_path || '';
   $('setInfo').innerHTML = `监听 <b>${esc(s.host)}:${esc(s.port)}</b> · 数据目录 <b>${esc(s.data_dir)}</b><br>提示：host/port/浏览器承载在 config.yaml 修改后重启生效`;
   await loadSummarySettings();
+  await loadFingerprint();
 }
 
 /* ---------------- 设置页：摘要模型（第三方 API，A1） ---------------- */
@@ -466,6 +541,7 @@ const ACTIONS = {
   hoTo3, hoGo, hoGoSettings,
   savePlatform: d => savePlatform(d.pid), checkLogin: d => checkLogin(d.pid, d.account),
   probeSel: d => probeSel(d.pid, d.account), chromeDetect, chromeValidate,
+  fpTest, fpSave,
   openS: d => openS(d.id),
   decide: d => decide(d.id, d.d),
   approveRound: d => approveRound(d.aid),
@@ -491,6 +567,7 @@ document.addEventListener('change', e => {
   const tgl = e.target.closest('[data-act="togglePlatform"]');
   if (tgl) { togglePlatform(tgl.dataset.pid, tgl.checked); return; }
   if (e.target.closest('[data-act="sumPreset"]')) sumPreset();
+  if (e.target.closest('[data-act="fpBackend"]')) fpBackendPick();
   if (e.target.id === 'hoPlatform') hoFillAccounts();
   if (e.target.id === 'hoAccount') hoProbeStatus();
 });

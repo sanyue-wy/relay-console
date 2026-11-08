@@ -32,15 +32,19 @@ def _port_open(port: int) -> bool:
 
 
 class ChromeManager:
-    def __init__(self, cfg):
+    def __init__(self, cfg, fp_api_key: str | None = None):
+        """fp_api_key：指纹浏览器本地 API 的密钥，由调用方从系统凭据库取（B3），
+        只用于内存中的后端实例，绝不写回 config.yaml。"""
         self.cfg = cfg
         self._pw: Playwright | None = None
         self._browsers: dict[tuple[str, str], Browser] = {}
         self._procs: dict[tuple[str, str], subprocess.Popen] = {}
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._start_lock = asyncio.Lock()      # 只保护 Playwright 的首次启动
-        fp_cfg = cfg.get("fingerprint") or {}
-        self.fp_cfg = dict(fp_cfg)
+        fp_cfg = dict(cfg.get("fingerprint") or {})
+        if fp_api_key:
+            fp_cfg["api_key"] = fp_api_key
+        self.fp_cfg = fp_cfg
         self.backend_name = str(fp_cfg.get("backend") or "chrome").strip().lower()
         self.backend = None if self.backend_name == "chrome" else build_backend(fp_cfg)
         self.profile_map = dict(fp_cfg.get("profiles") or {})

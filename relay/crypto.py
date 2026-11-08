@@ -14,6 +14,7 @@ SERVICE = "relay-console"        # 凭据库服务名
 CRED_MAIN = "main_pool_key"      # 条目名（真实密钥存在条目里，条目名不是秘密）
 CRED_ARENA = "arena_pool_key"
 CRED_API = "summary_api_key"
+CRED_FINGERPRINT = "fingerprint_api_key"   # 指纹浏览器本地 API 的密钥（B3）
 
 
 def get_fernet(name: str) -> Fernet:
@@ -36,6 +37,22 @@ def delete_api_key() -> None:
     """删除摘要 API 密钥条目；条目本来就不存在时静默通过。"""
     try:
         keyring.delete_password(SERVICE, CRED_API)
+    except keyring.errors.PasswordDeleteError:
+        pass
+
+
+# ---------------- 指纹浏览器本地 API 密钥（B3）
+def get_fingerprint_api_key() -> str | None:
+    return keyring.get_password(SERVICE, CRED_FINGERPRINT)
+
+
+def set_fingerprint_api_key(value: str) -> None:
+    keyring.set_password(SERVICE, CRED_FINGERPRINT, value)
+
+
+def delete_fingerprint_api_key() -> None:
+    try:
+        keyring.delete_password(SERVICE, CRED_FINGERPRINT)
     except keyring.errors.PasswordDeleteError:
         pass
 

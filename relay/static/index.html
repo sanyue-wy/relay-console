@@ -343,6 +343,29 @@
       </div>
     </div>
     <div>
+      <div class="card" id="card-fingerprint">
+        <h3>🧭 浏览器承载</h3>
+        <div class="row" style="gap:14px">
+          <label class="ck" style="margin:0"><input type="radio" name="fpBackend" value="chrome" data-act="fpBackend"> Chrome（内置）</label>
+          <label class="ck" style="margin:0"><input type="radio" name="fpBackend" value="adspower" data-act="fpBackend"> AdsPower</label>
+          <label class="ck" style="margin:0"><input type="radio" name="fpBackend" value="ovobrowser" data-act="fpBackend"> ovoBrowser</label>
+        </div>
+        <div class="hint" id="fpDesc"></div>
+        <div class="setrow"><label>api_base</label>
+          <input id="fpApiBase" placeholder="留空用默认（AdsPower / ovoBrowser 均为 http://127.0.0.1:50325）"></div>
+        <div class="setrow"><label>API 密钥</label>
+          <input id="fpKey" type="password" placeholder="只写不读；留空 = 不修改" autocomplete="new-password"></div>
+        <div class="sub" id="fpKeyState"></div>
+        <div class="setrow"><label>启动超时(秒)</label>
+          <input id="fpTimeout" type="number" min="1" max="600"></div>
+        <div class="row" style="margin-top:6px">
+          <button class="btn small" data-act="fpTest">测试并读取环境</button>
+          <button class="btn small" data-act="fpSave">保存设置</button>
+          <span class="sub" id="fpMsg"></span>
+        </div>
+        <div id="fpMapping" style="margin-top:8px"></div>
+        <div class="hint">AdsPower 与 ovoBrowser 默认占用同一个本地 API 端口，两个客户端不能同时开启；请在对应客户端的「设置 → 本地 API」里开启后测试。</div>
+      </div>
       <div class="card">
         <h3>⚔️ 对抗</h3>
         <div class="setrow"><label>Agent 限时(秒)</label><input id="setArenaTimeout" type="number" min="30"></div>

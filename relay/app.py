@@ -26,9 +26,11 @@ from .arena import ArenaRunner
 from .browser import ChromeManager
 from .config import (APP_VERSION, data_home, find_chrome, load_config, platform_accounts,
                      save_config)
-from .config_schema import port_conflicts, validate_platform
+from .config_schema import port_conflicts, validate_fingerprint, validate_platform
 from .crypto import (CRED_ARENA, CRED_MAIN, delete_api_key, get_api_key, get_fernet,
-                     get_platform_credential, set_api_key)
+                     get_fingerprint_api_key, get_platform_credential, set_api_key,
+                     set_fingerprint_api_key)
+from .fingerprint import FingerprintError, build_backend
 from .relay_engine import ManualHandoffError, RelayEngine
 from .storage import ArenaPool, MainPool, PoolError
 from .summarizer import (PROVIDER_PRESETS, Summarizer, friendly_api_error, validate_base_url)
@@ -85,6 +87,21 @@ def mint_bootstrap_url(cfg=None) -> str | None:
     return f"http://{_console_host(cfg)}:{int(cfg['port'])}/?token={_BOOTSTRAP_TOKEN}"
 
 
+def _migrate_plaintext_fp_key() -> bool:
+    """B3：config.yaml 里还留有明文 fingerprint.api_key 时，自动迁进系统凭据库，
+    配置值置空并保存，写一条审计（审计不记密钥内容）。返回是否发生了迁移。"""
+    val = str((CFG.get("fingerprint") or {}).get("api_key") or "").strip()
+    if not val:
+        return False
+    set_fingerprint_api_key(val)
+    CFG["fingerprint"]["api_key"] = ""
+    save_config(CFG)
+    S.arena.audit("system", "fingerprint_key_migrated",
+                  "config.yaml 明文 fingerprint.api_key 已迁入系统凭据库，配置值已置空")
+    log.warning("检测到 config.yaml 明文 fingerprint.api_key，已迁移进系统凭据库并置空")
+    return True
+
+
 def _schedule_auto_open(cfg) -> None:
     url = _auto_open_url(cfg)
     if not url:
@@ -97,7 +114,8 @@ def _schedule_auto_open(cfg) -> None:
 async def lifespan(app: FastAPI):
     S.main = MainPool(CFG["data_dir"], get_fernet(CRED_MAIN))
     S.arena = ArenaPool(CFG["data_dir"], get_fernet(CRED_ARENA), CFG["approvals"]["ticket_ttl_seconds"])
-    S.browser = ChromeManager(CFG)
+    _migrate_plaintext_fp_key()      # B3：先迁移明文密钥，ChromeManager 才能从凭据库拿到
+    S.browser = ChromeManager(CFG, fp_api_key=get_fingerprint_api_key())
     S.engine = RelayEngine(CFG, S.main, S.browser, Summarizer(CFG, S.main, get_api_key()))
     S.runner = ArenaRunner(CFG, S.main, S.arena, S.engine)
     if S.browser.backend is None:
@@ -741,6 +759,79 @@ def chrome_validate(b: ChromePathRequest):
     else:
         message = "有效"
     return {"ok": is_chrome, "exists": exists, "is_chrome": is_chrome, "message": message}
+
+
+# ---------------------------------------------------------------- 控制台：浏览器承载（B3）
+def _fingerprint_payload() -> dict:
+    fp = CFG.get("fingerprint") or {}
+    return {"backend": str(fp.get("backend") or "chrome"),
+            "api_base": fp.get("api_base", ""),
+            "has_key": bool(get_fingerprint_api_key() or os.environ.get("ADSPOWER_API_KEY")),
+            "startup_timeout_seconds": fp.get("startup_timeout_seconds", 90),
+            "profiles": fp.get("profiles") or {}}
+
+
+@app.get("/api/settings/fingerprint", dependencies=C)
+def get_fingerprint_settings():
+    """浏览器承载设置。密钥只有 has_key，永不回传。"""
+    return _fingerprint_payload()
+
+
+class FingerprintTestRequest(BaseModel):
+    backend: str
+    api_base: str | None = None
+    api_key: str | None = None          # 只用于本次测试，不保存
+
+
+@app.post("/api/settings/fingerprint/test", dependencies=C)
+async def test_fingerprint(b: FingerprintTestRequest):
+    """用临时参数连本地 API 读环境列表。chrome 无需测试，直接通过。"""
+    name = (b.backend or "").strip().lower()
+    if name == "chrome":
+        return {"ok": True, "profiles": [], "error": None}
+    key = (b.api_key or "").strip() or \
+        (None if os.environ.get("ADSPOWER_API_KEY") else get_fingerprint_api_key())
+    fp = {"backend": name, "api_base": (b.api_base or "").strip() or None,
+          "api_key": key, "startup_timeout_seconds": 15}   # 测试用短超时，快速失败
+    try:
+        be = build_backend(fp)
+        profiles = await be.list_profiles()
+        await be.aclose()
+        return {"ok": True, "error": None,
+                "profiles": [{"id": p.id, "name": p.name, "group": p.group} for p in profiles]}
+    except FingerprintError as e:
+        return {"ok": False, "profiles": [], "error": str(e)}
+
+
+class FingerprintUpdate(BaseModel):
+    backend: str | None = None
+    api_base: str | None = None
+    api_key: str | None = None           # 非空时写入系统凭据库，不落盘
+    startup_timeout_seconds: float | None = None
+    profiles: dict[str, dict[str, str]] | None = None
+
+
+@app.put("/api/settings/fingerprint", dependencies=C)
+def update_fingerprint(b: FingerprintUpdate):
+    """保存浏览器承载配置。不热切换 ChromeManager；backend 或密钥变化 → needs_restart。"""
+    cur = dict(CFG.get("fingerprint") or {})
+    merged = {"backend": str(b.backend or cur.get("backend") or "chrome"),
+              "api_base": b.api_base if b.api_base is not None else str(cur.get("api_base") or ""),
+              "api_key": "",               # 密钥永不写进 config.yaml
+              "startup_timeout_seconds": (b.startup_timeout_seconds if b.startup_timeout_seconds is not None
+                                          else float(cur.get("startup_timeout_seconds") or 90)),
+              "profiles": b.profiles if b.profiles is not None else dict(cur.get("profiles") or {})}
+    cleaned, errors = validate_fingerprint(merged)
+    if errors:
+        raise HTTPException(400, {"error": "VALIDATION", "errors": errors})
+    if b.api_key and b.api_key.strip():
+        set_fingerprint_api_key(b.api_key.strip())
+    backend_changed = cleaned["backend"] != str(cur.get("backend") or "chrome")
+    key_changed = bool(b.api_key and b.api_key.strip())
+    CFG["fingerprint"] = cleaned
+    save_config(CFG)
+    return {"ok": True, "needs_restart": bool(backend_changed or key_changed),
+            **_fingerprint_payload()}
 
 
 # ---------------------------------------------------------------- 控制台：摘要模型设置（A1）
