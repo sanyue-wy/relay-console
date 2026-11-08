@@ -29,7 +29,7 @@ from .crypto import (CRED_ARENA, CRED_MAIN, delete_api_key, get_api_key, get_fer
                      get_platform_credential, set_api_key)
 from .relay_engine import RelayEngine
 from .storage import ArenaPool, MainPool, PoolError
-from .summarizer import PROVIDER_PRESETS, Summarizer, validate_base_url
+from .summarizer import (PROVIDER_PRESETS, Summarizer, friendly_api_error, validate_base_url)
 
 CFG = load_config()
 log = logging.getLogger("relay.app")
@@ -304,6 +304,75 @@ def session_detail(sid: str):
 @app.post("/api/sessions/{sid}/ask", dependencies=C)
 async def ask(sid: str, b: Ask):
     return await S.engine.ask(sid, b.text)
+
+
+# ---------------------------------------------------------------- 控制台：摘要预览与编辑（A2）
+@app.post("/api/sessions/{sid}/summary/refresh", dependencies=C)
+async def refresh_summary(sid: str):
+    """强制刷新摘要。提供者未配置或调用失败时回退缓存/空摘要并说明原因，不报 500。"""
+    s = S.main.get_session(sid)
+    summ = S.engine.summ
+    if not summ.available:
+        if s.summary:
+            return {"summary": s.summary, "upto_id": s.summarized_upto, "source": "cached",
+                    "warning": "未配置摘要提供者，已使用缓存摘要；可在设置页配置第三方 API"}
+        return {"summary": "", "upto_id": s.summarized_upto, "source": "none",
+                "warning": "未配置摘要提供者，且暂无缓存摘要；配置后交接可附带四小节摘要"}
+    try:
+        text = await summ.update(sid)
+    except Exception as e:
+        s2 = S.main.get_session(sid)
+        cached = s2.summary or ""
+        msg = friendly_api_error(e)
+        if cached:
+            return {"summary": cached, "upto_id": s2.summarized_upto, "source": "cached",
+                    "warning": f"摘要 API 调用失败（{msg}），已回退到缓存摘要"}
+        return {"summary": "", "upto_id": s2.summarized_upto, "source": "none",
+                "warning": f"摘要 API 调用失败（{msg}），且暂无缓存摘要"}
+    s2 = S.main.get_session(sid)
+    if text is None:
+        return {"summary": "", "upto_id": s2.summarized_upto, "source": "cached",
+                "warning": "没有新增对话需要摘要"}
+    return {"summary": text, "upto_id": s2.summarized_upto, "source": "api", "warning": None}
+
+
+class SummaryEdit(BaseModel):
+    summary: str
+
+
+@app.put("/api/sessions/{sid}/summary", dependencies=C)
+def edit_summary(sid: str, b: SummaryEdit):
+    """保存用户手工修改后的摘要；upto_id 取当前最后一条消息的 id。审计只记长度不记正文。"""
+    s = S.main.get_session(sid)
+    text = b.summary or ""
+    if len(text) > 8000:
+        raise HTTPException(400, f"摘要最长 8000 字（当前 {len(text)} 字）")
+    msgs = S.main.messages(sid)
+    upto = msgs[-1]["id"] if msgs else s.summarized_upto
+    S.main.set_summary(sid, text, upto)
+    S.arena.audit("user", "summary_edit", {"session_id": sid, "chars": len(text)})
+    return {"summary": text, "upto_id": upto}
+
+
+@app.get("/api/sessions/{sid}/handoff/preview", dependencies=C)
+def handoff_preview(sid: str, platform: str | None = None, account: str | None = None,
+                    recent_rounds: int | None = None):
+    """用当前摘要拼出交接包但不发送：让用户提前知道字数与投递方式（会不会被裁剪）。
+
+    拼装逻辑与 handoff_package 共用（Summarizer.assemble_package），保证预览=实际投递。
+    """
+    s = S.main.get_session(sid)
+    pid = platform or s.current_platform
+    if pid not in adapters.available():
+        raise HTTPException(400, "unknown platform")
+    acct = account or s.account or "main"
+    if acct not in platform_accounts(CFG, pid):
+        raise HTTPException(400, f"{pid} 没有登记账号 {acct}")
+    package = S.engine.summ.assemble_package(sid, recent_rounds)
+    info = S.engine.adapter_info(pid, acct)
+    mode = S.engine.deliver_mode(info, len(package))
+    return {"package": package, "chars": len(package),
+            "target_limit": info.max_input_chars, "mode": mode}
 
 
 # ---------------------------------------------------------------- 控制台：对抗池管理

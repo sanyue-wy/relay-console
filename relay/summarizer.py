@@ -171,17 +171,25 @@ class Summarizer:
             except Exception as e:  # 摘要失败不影响对话
                 log.warning("summary update failed: %s", e)
 
-    async def handoff_package(self, sid: str) -> str:
-        try:
-            await self.update(sid)          # 尽量补齐最新几轮
-        except Exception as e:
-            log.warning("handoff: use cached summary (%s)", e)
+    def assemble_package(self, sid: str, recent_rounds: int | None = None) -> str:
+        """由当前缓存摘要 + 最近几轮原文拼出交接包（不调 API）。
+
+        handoff_package（自动接力/手动切换）与 handoff/preview（A2）共用此拼装逻辑，
+        保证预览和实际投递的内容一致。
+        """
         s = self.main.get_session(sid)
-        n = self.cfg.get("recent_rounds_raw", 3) * 2
-        recent = self.main.messages(sid, limit=n)
+        rounds = self.cfg.get("recent_rounds_raw", 3) if recent_rounds is None else max(0, int(recent_rounds))
+        recent = self.main.messages(sid, limit=rounds * 2)
         # Ghost messages：最近几轮以引用块回放，让新会话“看起来没有中断”
         ghost = "\n\n".join(
             f"> **{'用户' if m['role'] == 'user' else 'AI（' + (m.get('platform') or '') + '）'}**："
             f"{m['content'][:800]}" for m in recent)
         summary = s.summary or "（暂无摘要，以下为最近对话原文）"
         return f"{HANDOFF_HEADER}{summary}\n\n## 最近的对话（原文回放）\n{ghost}"
+
+    async def handoff_package(self, sid: str, recent_rounds: int | None = None) -> str:
+        try:
+            await self.update(sid)          # 尽量补齐最新几轮
+        except Exception as e:
+            log.warning("handoff: use cached summary (%s)", e)
+        return self.assemble_package(sid, recent_rounds)

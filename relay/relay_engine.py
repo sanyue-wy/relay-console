@@ -69,6 +69,25 @@ class RelayEngine:
         await ad.start()
         return ad
 
+    def adapter_info(self, pid: str, account: str = "main"):
+        """只取适配器能力声明，不连接浏览器（交接预览用）。"""
+        url = self.cfg["platforms"].get(pid, {}).get("url")
+        return adapters.create(pid, page_provider=None, url=url, account=account).info
+
+    @staticmethod
+    def deliver_mode(info, package_len: int, question: str = "") -> str:
+        """预判交接包投递方式：inline 直接发送 / upload_md 走附件 / trimmed 会被裁剪。
+
+        与 _deliver_handoff 共用同一判断，预览（A2）和实际投递保持一致。
+        """
+        limit = info.max_input_chars or 10 ** 9
+        combined = package_len + len(f"\n\n## 现在请回答\n{question}")
+        if combined <= limit:
+            return "inline"
+        if Cap.FILE_UPLOAD in info.caps:
+            return "upload_md"
+        return "trimmed"
+
     def platform_status(self) -> list[dict]:
         now = datetime.now()
         out = []
@@ -120,11 +139,11 @@ class RelayEngine:
 
     async def _deliver_handoff(self, ad: Participant, package: str, question: str) -> str:
         """构造交接首条消息。过长且支持上传时走 .md；否则保留头部/摘要、裁剪回放。"""
-        combined = f"{package}\n\n## 现在请回答\n{question}"
-        limit = ad.info.max_input_chars or 10**9
-        if len(combined) <= limit:
-            return combined
-        if Cap.FILE_UPLOAD in ad.info.caps:
+        mode = self.deliver_mode(ad.info, len(package), question)
+        if mode == "inline":
+            return f"{package}\n\n## 现在请回答\n{question}"
+        limit = ad.info.max_input_chars or 10 ** 9
+        if mode == "upload_md":
             path = Path(tempfile.gettempdir()) / f"handoff_{int(time.time())}.md"
             path.write_text(package, encoding="utf-8")
             try:
