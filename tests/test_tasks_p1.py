@@ -1,4 +1,5 @@
 """P1 任务回归测试（T5-T10）。"""
+import asyncio
 import sys
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from cryptography.fernet import Fernet
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from adapters.spec import NotReady  # noqa: E402
 from relay.browser import ChromeManager  # noqa: E402
 from relay.config import Config  # noqa: E402
 from relay.relay_engine import RelayEngine  # noqa: E402
@@ -48,3 +50,41 @@ def test_t6_unregistered_account_raises(tmp_path):
     with pytest.raises(PoolError, match="NOT_FOUND"):
         mgr._port("deepseek", "ghost")
     assert mgr._port("deepseek", "main") == 9301
+
+
+# ---------------- T7：NotReady 不切换会话平台
+class _FakeInfo:
+    max_input_chars = 1000
+    caps = 0
+
+
+class _FakeAd:
+    def __init__(self):
+        self.info = _FakeInfo()
+        self.lock = asyncio.Lock()
+
+    async def new_chat(self):
+        return None
+
+    async def send(self, turn):
+        raise NotReady("未登录")
+
+
+def test_t7_not_ready_does_not_switch_platform(tmp_path):
+    main = MainPool(tmp_path, Fernet(Fernet.generate_key()))
+    sid = main.create_session("t", "deepseek")
+    cfg = {"relay_order": ["deepseek", "kimi"], "default_cooldown_minutes": 1,
+           "platforms": {"deepseek": {"port": 9301, "accounts": ["main"]},
+                         "kimi": {"port": 9303, "accounts": ["main"]}}}
+    eng = RelayEngine(cfg, main=main, browser=None, summarizer=None)
+
+    async def fake_adapter(pid, account="main"):
+        return _FakeAd()
+
+    eng.adapter = fake_adapter
+    with pytest.raises(NotReady, match="请先在账户页登录 deepseek:main"):
+        asyncio.run(eng.ask(sid, "hello", timeout=1))
+    s = main.get_session(sid)
+    assert s.current_platform == "deepseek"      # 没有被切到 kimi
+    assert s.account == "main"
+    assert main.messages(sid) == []              # 用户消息已回滚

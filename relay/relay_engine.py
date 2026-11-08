@@ -203,18 +203,12 @@ class RelayEngine:
                     self.main.switch_platform(sid, platform, f"{e.state.signal}: {e.state.detail}",
                                               new_account=account)
                     is_handoff = True
-                except (NotReady, SelectorBroken) as e:
-                    # 页面未就绪/选择器失效：不冷却，换下一个可用目标继续（避免整次提问直接失败）
-                    tried.add((platform, account))
-                    nxt = self._next_target(platform, account, tried)
-                    if not nxt:
-                        raise
-                    package = await self.summ.handoff_package(sid)
-                    relays.append({"from": f"{platform}:{account}", "to": f"{nxt[0]}:{nxt[1]}",
-                                   "reason": e.code})
-                    platform, account = nxt
-                    self.main.switch_platform(sid, platform, f"{e.code}: {e}", new_account=account)
-                    is_handoff = True
+                except NotReady as e:
+                    # 只是没登录/页面没就绪：不写接力链、不换平台，提示用户先登录
+                    raise NotReady(f"请先在账户页登录 {platform}:{account}") from e
+                except SelectorBroken:
+                    # 选择器失效保持原样抛出，不触发接力
+                    raise
         except Exception:
             # 一条都没送出去才回滚；已经送达过就保留记录（平台侧可能已经收到）
             if not sent_any:
