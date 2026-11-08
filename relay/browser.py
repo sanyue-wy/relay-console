@@ -20,6 +20,7 @@ from playwright.async_api import Browser, Page, Playwright, async_playwright
 from adapters.spec import AdapterError, ChromeNotFound, PortNotReady, ProfileInUse
 
 from .config import platform_accounts
+from .config_schema import port_conflicts
 from .fingerprint import FingerprintError, build_backend, resolve_profile_id
 from .storage import PoolError
 
@@ -46,21 +47,13 @@ class ChromeManager:
         self._validate_ports()
 
     def _validate_ports(self) -> None:
-        """启动时全局校验端口：base + 10*i 仍可能被手工配置成相撞（如 9301 与 9311）。"""
-        seen: dict[int, tuple[str, str]] = {}
-        conflicts = []
-        for pid in self.cfg.get("platforms", {}):
-            for account in platform_accounts(self.cfg, pid):
-                port = self._port(pid, account)
-                if port in seen:
-                    conflicts.append((seen[port], (pid, account), port))
-                else:
-                    seen[port] = (pid, account)
+        """启动时全局校验端口：base + 10*i 仍可能被手工配置成相撞（如 9301 与 9311）。
+
+        冲突规则与 config_schema.port_conflicts 一处维护（B1）。
+        """
+        conflicts = port_conflicts(self.cfg.get("platforms") or {})
         if conflicts:
-            detail = "；".join(
-                f"{a[0]}:{a[1]} 与 {b[0]}:{b[1]} 都使用端口 {port}"
-                for a, b, port in conflicts)
-            raise ValueError(f"平台端口配置冲突（每个账号需要独立调试端口）：{detail}")
+            raise ValueError(f"平台端口配置冲突（每个账号需要独立调试端口）：{'；'.join(conflicts)}")
 
     def _port(self, pid: str, account: str | None = None) -> int:
         """每平台预留 10 个连续端口（base+10*i）。
