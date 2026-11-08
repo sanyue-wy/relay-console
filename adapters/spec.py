@@ -77,6 +77,18 @@ class AdapterError(Exception):
     code = "ADAPTER_ERROR"
 
 
+class ChromeNotFound(AdapterError):
+    code = "CHROME_NOT_FOUND"        # chrome_path 不存在
+
+
+class ProfileInUse(AdapterError):
+    code = "PROFILE_IN_USE"          # 同一个 user-data-dir 被别的 Chrome 占用
+
+
+class PortNotReady(AdapterError):
+    code = "PORT_NOT_READY"          # 调试端口等待超时
+
+
 class NotReady(AdapterError):
     code = "NOT_READY"               # 未登录 / 页面未加载 / Agent 未连接
 

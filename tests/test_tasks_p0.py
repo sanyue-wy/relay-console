@@ -1,4 +1,5 @@
 """P0 任务回归测试（T1-T4）。"""
+import asyncio
 import sys
 from pathlib import Path
 
@@ -10,6 +11,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import relay.app as appmod  # noqa: E402
+import relay.browser as browser_mod  # noqa: E402
+from adapters.spec import ChromeNotFound, PortNotReady, ProfileInUse  # noqa: E402
+from relay.browser import ChromeManager  # noqa: E402
 
 
 def make_client(tmp_path, monkeypatch, **kwargs):
@@ -29,3 +33,65 @@ def test_t1_unhandled_exception_returns_json(tmp_path, monkeypatch):
         r = c.get("/api/agents", headers=H)
         assert r.status_code == 500
         assert r.json() == {"error": "RuntimeError", "detail": "x"}
+
+
+# ---------------- T2：Chrome 启动失败的可读错误
+def _chrome_cfg(tmp_path, chrome: Path | None = None):
+    chrome = chrome or (tmp_path / "chrome.exe")
+    if chrome.name != "missing.exe":
+        chrome.parent.mkdir(parents=True, exist_ok=True)
+        chrome.write_text("", encoding="utf-8")
+    return {"platforms": {"deepseek": {"port": 9301, "accounts": ["main"]}},
+            "profiles_dir": str(tmp_path / "profiles"),
+            "chrome_path": str(chrome),
+            "fingerprint": {"backend": "chrome"}}
+
+
+def test_t2_chrome_not_found(tmp_path):
+    cfg = _chrome_cfg(tmp_path, tmp_path / "missing.exe")
+    mgr = ChromeManager(cfg)
+    with pytest.raises(ChromeNotFound, match="missing.exe"):
+        mgr.launch("deepseek", "https://example.com", "main")
+
+
+class _FakeProc:
+    def __init__(self, code):
+        self._code = code
+
+    def poll(self):
+        return self._code
+
+
+def test_t2_profile_in_use(tmp_path, monkeypatch):
+    mgr = ChromeManager(_chrome_cfg(tmp_path))
+    monkeypatch.setattr(browser_mod, "_port_open", lambda p: False)
+    monkeypatch.setattr(browser_mod.subprocess, "Popen", lambda *a, **k: _FakeProc(1))
+    with pytest.raises(ProfileInUse, match="已被另一个 Chrome"):
+        asyncio.run(mgr._chrome_endpoint("deepseek", "https://example.com", "main"))
+
+
+def test_t2_port_not_ready(tmp_path, monkeypatch):
+    mgr = ChromeManager(_chrome_cfg(tmp_path))
+    monkeypatch.setattr(browser_mod, "_port_open", lambda p: False)
+    monkeypatch.setattr(browser_mod.subprocess, "Popen", lambda *a, **k: _FakeProc(None))
+
+    async def _nosleep(*a, **k):
+        return None
+
+    monkeypatch.setattr(browser_mod.asyncio, "sleep", _nosleep)
+    with pytest.raises(PortNotReady, match="9301"):
+        asyncio.run(mgr._chrome_endpoint("deepseek", "https://example.com", "main"))
+
+
+@pytest.mark.parametrize("exc", [ChromeNotFound("x"), ProfileInUse("x"), PortNotReady("x")])
+def test_t2_api_returns_502_with_code(tmp_path, monkeypatch, exc):
+    with make_client(tmp_path, monkeypatch) as c:
+        H = {"X-Console-Token": appmod.CONSOLE_TOKEN}
+
+        async def boom(*a, **k):
+            raise exc
+
+        monkeypatch.setattr(appmod.S.browser, "page", boom)
+        r = c.post("/api/platforms/deepseek/open", headers=H, json={"account": "main"})
+        assert r.status_code == 502
+        assert r.json()["error"] == exc.code

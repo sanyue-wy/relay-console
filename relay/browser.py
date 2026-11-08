@@ -17,8 +17,10 @@ from urllib.parse import urlparse
 
 from playwright.async_api import Browser, Page, Playwright, async_playwright
 
+from adapters.spec import AdapterError, ChromeNotFound, PortNotReady, ProfileInUse
+
 from .config import platform_accounts
-from .fingerprint import build_backend, resolve_profile_id
+from .fingerprint import FingerprintError, build_backend, resolve_profile_id
 
 
 def _port_open(port: int) -> bool:
@@ -56,13 +58,18 @@ class ChromeManager:
 
     def launch(self, pid: str, url: str, account: str | None = None) -> None:
         account = account or "main"
+        chrome = Path(str(self.cfg.get("chrome_path") or ""))
+        if not chrome.exists():
+            raise ChromeNotFound(
+                f"找不到 Chrome：{chrome}。请到设置页把 chrome_path 改成实际安装路径，"
+                f"或安装 Chrome 后重启控制台。")
         port = self._port(pid, account)
         if _port_open(port):
             return
         profile = Path(self.cfg["profiles_dir"]) / pid / account
         profile.mkdir(parents=True, exist_ok=True)
         self._procs[(pid, account)] = subprocess.Popen([
-            self.cfg["chrome_path"],
+            str(chrome),
             f"--remote-debugging-port={port}",
             f"--user-data-dir={profile}",
             "--no-first-run", "--no-default-browser-check",
@@ -72,11 +79,17 @@ class ChromeManager:
     async def _chrome_endpoint(self, pid: str, url: str, account: str) -> str:
         self.launch(pid, url, account)
         port = self._port(pid, account)
+        proc = self._procs.get((pid, account))
         for _ in range(60):
             if _port_open(port):
                 return f"http://127.0.0.1:{port}"
+            if proc is not None and proc.poll() is not None:
+                raise ProfileInUse(
+                    f"{pid}:{account} 的 Chrome 已退出（调试端口 {port} 未打开）。"
+                    f"常见原因：同一个 profile 已被另一个 Chrome 占用；"
+                    f"请先关闭那个窗口再重试。")
             await asyncio.sleep(0.5)
-        raise RuntimeError(f"{pid}:{account} 的 Chrome 调试端口 {port} 未就绪")
+        raise PortNotReady(f"{pid}:{account} 的 Chrome 调试端口 {port} 等待 30 秒仍未就绪")
 
     async def _pick_page(self, br: Browser, url: str) -> Page:
         ctx = br.contexts[0] if br.contexts else await br.new_context()
@@ -102,10 +115,19 @@ class ChromeManager:
                 endpoint = await self._chrome_endpoint(pid, url, account)
             else:
                 profile_id = resolve_profile_id(self.profile_map, pid, account)
-                endpoint = await self.backend.start(profile_id)
+                try:
+                    endpoint = await self.backend.start(profile_id)
+                except FingerprintError as exc:
+                    raise AdapterError(
+                        f"连接 {self.backend_name} 本地 API 失败（{pid}:{account}）：{exc}。"
+                        f"请先启动 AdsPower/ovoBrowser 客户端并在设置里开启本地 API。") from exc
             br = self._browsers.get(key)
             if br is None or not br.is_connected():
-                br = await self._pw.chromium.connect_over_cdp(endpoint)
+                try:
+                    br = await self._pw.chromium.connect_over_cdp(endpoint)
+                except Exception as exc:
+                    raise AdapterError(
+                        f"连接 {pid}:{account} 的浏览器失败（{endpoint}）：{exc}") from exc
                 self._browsers[key] = br
             return await self._pick_page(br, url)
 
