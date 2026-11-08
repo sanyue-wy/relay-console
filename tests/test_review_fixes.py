@@ -197,4 +197,7 @@ def test_run_once_returns_restart(monkeypatch):
 
     monkeypatch.setattr(run_console.uvicorn, "Server", FakeServer)
     monkeypatch.setattr(run_console, "start_tray", fake_tray)
-    assert run_console.run_once(reload_app=False) == "restart"
+    assert run_console.run_once() == "restart"
+    # Windows 下 argv[0] 不能带空格：源码模式用 "python" + 相对脚本名
+    args = run_console._restart_args()
+    assert args[0] == "python" and args[1].endswith("run_console.py")

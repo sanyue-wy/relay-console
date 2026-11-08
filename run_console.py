@@ -2,15 +2,17 @@
 
 控制台运行期间在 Windows 右下角显示托盘图标：
   双击 / “打开控制台” → 生成一个新的一次性登录地址并在浏览器打开
-  “重启控制台” → 停掉服务后在同一进程里重新加载配置和 app（改了 config.yaml 时用）
+  “重启控制台” → 停服后 os.execv 进程自重启（改了 config.yaml 时用）
   “退出” → 停止服务并退出
 """
 from __future__ import annotations
 
-import importlib
+import os
+import sys
 import threading
 import time
 import webbrowser
+from pathlib import Path
 
 import uvicorn
 
@@ -73,16 +75,27 @@ def start_tray(server: uvicorn.Server, cfg, action: dict) -> tuple[object, threa
     return icon, thread
 
 
-def run_once(reload_app: bool = True) -> str:
-    """跑一轮控制台，返回 'restart' 或 'quit'。
+def _restart_args() -> list[str]:
+    """重启的 argv。Windows 下 argv[0] 不能带空格（本机路径有空格，会拼坏命令行），
+    所以源码模式用 "python" + 相对脚本名；打包后用 exe 的文件名。"""
+    if getattr(sys, "frozen", False):
+        return [Path(sys.executable).name]
+    return ["python", Path(__file__).name]
 
-    重启不另起进程：uvicorn 停掉后重新 import 配置和 relay.app，
-    这样 config.yaml 的 host/port/平台/指纹设置都会重新加载。
-    """
+
+def _restart_process() -> None:
+    """进程自重启：停服后 os.execv 原地替换进程，配置和令牌全部重新加载。"""
+    if getattr(sys, "frozen", False):
+        os.execv(sys.executable, _restart_args())
+    else:
+        os.chdir(Path(__file__).resolve().parent)     # 相对脚本名依赖工作目录
+        os.execv(sys.executable, _restart_args())
+
+
+def run_once() -> str:
+    """跑一轮控制台，返回 'restart' 或 'quit'。"""
     import relay.app as appmod
 
-    if reload_app:
-        importlib.reload(appmod)              # 重新读 config.yaml，生成新的令牌
     cfg = appmod.CFG
     server = uvicorn.Server(uvicorn.Config(
         appmod.app, host=cfg["host"], port=int(cfg["port"]), log_level="info"))
@@ -102,10 +115,14 @@ def run_once(reload_app: bool = True) -> str:
 
 
 def main() -> None:
-    first = True
-    while run_once(reload_app=not first) == "restart":
-        first = False
+    action = run_once()
+    if action == "restart":
         time.sleep(0.3)                       # 让端口/托盘先释放
+        _restart_process()
+
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":
