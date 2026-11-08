@@ -54,6 +54,8 @@ def main() -> None:
     out = ROOT / "dist" / "RelayConsole"
     if not (out / "RelayConsole.exe").exists():
         sys.exit("打包结束但未找到 dist/RelayConsole/RelayConsole.exe，请查看上方 PyInstaller 输出")
+    # 给接收者一个免注册表的快捷方式创建脚本（对方没有 Python 也能用）
+    shutil.copy(ROOT / "scripts" / "create_desktop_shortcut.bat", out / "创建桌面快捷方式.bat")
     zip_path = shutil.make_archive(
         str(ROOT / "dist" / f"RelayConsole-{APP_VERSION}-win64"), "zip",
         root_dir=ROOT / "dist", base_dir="RelayConsole")

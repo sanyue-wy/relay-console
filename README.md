@@ -15,6 +15,7 @@
 ```
 relay-console/
   run_console.py            启动控制台
+  启动控制台.bat            双击快速启动（源码模式）
   config.example.yaml       配置模板（复制为 config.yaml）
   relay/                    控制台后端
     app.py                  FastAPI：/api/*（你）  /agent/*（Agent）
@@ -42,6 +43,8 @@ relay-console/
     add_credential.py       录入平台账号登录凭据（autofill 用）
     fingerprint_profiles.py 列出指纹浏览器环境 ID（填 config 用）
     build_exe.py            打包 Windows exe（PyInstaller，分发用）
+    make_shortcut.py        生成桌面/开始菜单快捷方式（免注册表）
+    create_desktop_shortcut.bat  exe 接收者用的快捷方式脚本（随包分发）
   tests/                    离线自测（无需浏览器），35 项
 ```
 
@@ -55,6 +58,13 @@ python scripts/setup_keys.py              # 输入摘要 API key，存入 Window
 python -m pytest -q                       # 35 项自测应全部通过
 ```
 不需要 `playwright install`，程序连接你本机安装的 Chrome（或指纹浏览器提供的 CDP）。
+
+## 快速启动（免注册表）
+- **源码运行**：双击根目录的 **`启动控制台.bat`**；或运行 `python scripts/make_shortcut.py`
+  生成「桌面 + 开始菜单」快捷方式（只写 `.lnk` 文件——不写注册表、不装服务、不设自启，
+  `--remove` 两步删除）。控制台窗口保持打开就是服务在跑，关窗即停止。
+- **exe 接收者**：程序目录里有 **`创建桌面快捷方式.bat`**，双击即得桌面快捷方式。
+- 想钉到任务栏：开始菜单搜 Relay Console → 右键 → 固定到任务栏（系统自带操作，同样不碰注册表）。
 
 ## 首次使用
 1. **登录各平台**，二选一：
