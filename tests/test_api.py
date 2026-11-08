@@ -58,3 +58,53 @@ def test_resume_chat_and_session_status(tmp_path, monkeypatch):
         assert data["scope_type"] == "session" and data["platform"] == "deepseek"
         assert "summary_preview" in data and "messages" not in data   # 正文永不出池
         assert c.post(f"/agent/requests/{rid}/fetch", headers=A).json()["error"] == "TICKET_USED"
+
+
+def test_pool_session_linkage(tmp_path, monkeypatch):
+    """会话池 ↔ Agent 读取池一一对应：同一会话重复发布原位更新，不产生第二条。"""
+    with make_client(tmp_path, monkeypatch) as c:
+        H = {"X-Console-Token": appmod.CONSOLE_TOKEN}
+        sid = c.post("/api/sessions", headers=H, json={"title": "t", "platform": "deepseek"}).json()["id"]
+        i1 = c.post("/api/pool/publish", headers=H,
+                    json={"title": "t", "session_id": sid, "mode": "text", "text": "v1"}).json()
+        assert i1["linked"] is True
+        i2 = c.post("/api/pool/publish", headers=H,
+                    json={"title": "t", "session_id": sid, "mode": "text", "text": "v2"}).json()
+        assert i2["id"] == i1["id"]                      # 同一会话 → 同一条目
+        items = c.get("/api/pool/items", headers=H).json()
+        assert [i["session_id"] for i in items if i["id"] == i1["id"]] == [sid]
+        assert c.get(f"/api/sessions/{sid}", headers=H).json()["pool_item_id"] == i1["id"]
+        # 不带会话的独立发布另起一条
+        i3 = c.post("/api/pool/publish", headers=H,
+                    json={"title": "独立", "mode": "text", "text": "x"}).json()
+        assert i3["linked"] is False and i3["id"] != i1["id"]
+        assert len(c.get("/api/pool/items", headers=H).json()) == 2
+
+
+def test_settings_and_accounts_registry(tmp_path, monkeypatch):
+    monkeypatch.setattr(appmod, "save_config", lambda cfg: None)   # 测试不写真实 config.yaml
+    with make_client(tmp_path, monkeypatch) as c:
+        H = {"X-Console-Token": appmod.CONSOLE_TOKEN}
+        assert c.get("/api/settings").status_code == 401
+        s = c.get("/api/settings", headers=H).json()
+        assert "relay_order" in s and "near_threshold_chars" in s
+        # 基本管理：改接力顺序与开关
+        r = c.post("/api/settings", headers=H,
+                   json={"relay_order": ["kimi", "deepseek"], "relay_on_truncation": True,
+                         "default_cooldown_minutes": 30}).json()
+        assert r["relay_order"] == ["kimi", "deepseek"] and r["relay_on_truncation"] is True
+        assert c.post("/api/settings", headers=H,
+                      json={"relay_order": ["nope"]}).status_code == 400
+        # 账户登记：多账号池 + autofill，立即反映到 /api/platforms
+        acc = c.post("/api/platforms/deepseek/accounts", headers=H,
+                     json={"accounts": ["main", "backup"], "autofill": True}).json()
+        assert acc["accounts"] == ["main", "backup"] and acc["autofill"] is True
+        plats = c.get("/api/platforms", headers=H).json()["platforms"]
+        ds = [p for p in plats if p["id"] == "deepseek"][0]
+        assert [a["account"] for a in ds["accounts"]] == ["main", "backup"]
+        assert c.post("/api/platforms/deepseek/accounts", headers=H,
+                      json={"accounts": []}).status_code == 400
+        assert c.post("/api/platforms/deepseek/accounts", headers=H,
+                      json={"accounts": ["a", "a"]}).status_code == 400
+        assert c.post("/api/platforms/nope/accounts", headers=H,
+                      json={"accounts": ["x"]}).status_code == 400

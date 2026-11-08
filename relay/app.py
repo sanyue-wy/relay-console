@@ -20,7 +20,7 @@ from adapters.spec import AdapterError
 
 from .arena import ArenaRunner
 from .browser import ChromeManager
-from .config import load_config, platform_accounts
+from .config import load_config, platform_accounts, save_config
 from .crypto import CRED_ARENA, CRED_MAIN, get_api_key, get_fernet, get_platform_credential
 from .relay_engine import RelayEngine
 from .storage import ArenaPool, MainPool, PoolError
@@ -179,9 +179,10 @@ def new_session(b: NewSession):
 @app.get("/api/sessions/{sid}", dependencies=C)
 def session_detail(sid: str):
     s = S.main.get_session(sid)
+    linked = [i["id"] for i in S.arena.list_items() if i.get("session_id") == sid]
     return {"id": s.id, "title": s.title, "platform": s.current_platform, "account": s.account,
             "chain": s.chain, "summary": s.summary, "messages": S.main.messages(sid),
-            "handoffs": S.main.handoffs(sid)}
+            "handoffs": S.main.handoffs(sid), "pool_item_id": linked[0] if linked else None}
 
 
 @app.post("/api/sessions/{sid}/ask", dependencies=C)
@@ -204,6 +205,8 @@ def publish(b: Publish):
     if b.mode == "text":
         content = b.text or ""
     else:
+        if not b.session_id:
+            raise HTTPException(400, "该发布模式需要选择源会话")
         s = S.main.get_session(b.session_id)
         if b.mode == "summary":
             content = s.summary or ""
@@ -212,7 +215,9 @@ def publish(b: Publish):
             content = "\n".join(f"{m['role']}: {m['content']}" for m in msgs)
     if not content.strip():
         raise HTTPException(400, "内容为空")
-    return {"id": S.arena.publish_item(b.title, content, b.audience)}
+    # 会话池 ↔ Agent 读取池一一对应：带 session_id 的发布总是更新同一条目
+    iid = S.arena.publish_item(b.title, content, b.audience, session_id=b.session_id)
+    return {"id": iid, "linked": bool(b.session_id)}
 
 
 @app.get("/api/pool/items", dependencies=C)
@@ -305,6 +310,89 @@ def arena_detail(aid: str):
     status = "idle" if not t else ("running" if not t.done() else
                                    ("error: " + str(t.exception())) if t.exception() else "done")
     return S.arena.arena(aid) | {"turns": S.arena.turns(aid), "round_status": status}
+
+
+# ---------------------------------------------------------------- 控制台：设置与账号登记
+class SettingsUpdate(BaseModel):
+    relay_order: list[str] | None = None
+    default_cooldown_minutes: int | None = None
+    relay_on_truncation: bool | None = None
+    near_threshold_chars: int | None = None
+    every_n_turns: int | None = None
+    recent_rounds_raw: int | None = None
+    agent_turn_timeout: int | None = None
+    allow_batch_approve: bool | None = None
+
+
+@app.get("/api/settings", dependencies=C)
+def get_settings():
+    return {"host": CFG["host"], "port": CFG["port"], "data_dir": CFG["data_dir"],
+            "relay_order": CFG["relay_order"],
+            "default_cooldown_minutes": CFG.get("default_cooldown_minutes", 180),
+            "relay_on_truncation": CFG.get("relay_on_truncation", False),
+            "near_threshold_chars": CFG["summary"].get("near_threshold_chars", 0),
+            "every_n_turns": CFG["summary"].get("every_n_turns", 4),
+            "recent_rounds_raw": CFG["summary"].get("recent_rounds_raw", 3),
+            "agent_turn_timeout": CFG["arena"].get("agent_turn_timeout", 600),
+            "allow_batch_approve": CFG["arena"].get("allow_batch_approve", False)}
+
+
+@app.post("/api/settings", dependencies=C)
+def update_settings(b: SettingsUpdate):
+    """基本管理：运行时改 CFG 并写回 config.yaml（整体落盘，注释会丢失）。"""
+    if b.relay_order is not None:
+        order = [x.strip() for x in b.relay_order if x.strip()]
+        unknown = [x for x in order if x not in adapters.available()]
+        if unknown:
+            raise HTTPException(400, f"未知平台: {unknown}")
+        CFG["relay_order"] = order
+    if b.default_cooldown_minutes is not None:
+        CFG["default_cooldown_minutes"] = max(1, int(b.default_cooldown_minutes))
+    if b.relay_on_truncation is not None:
+        CFG["relay_on_truncation"] = bool(b.relay_on_truncation)
+    if b.near_threshold_chars is not None:
+        CFG["summary"]["near_threshold_chars"] = max(0, int(b.near_threshold_chars))
+    if b.every_n_turns is not None:
+        CFG["summary"]["every_n_turns"] = max(1, int(b.every_n_turns))
+    if b.recent_rounds_raw is not None:
+        CFG["summary"]["recent_rounds_raw"] = max(0, int(b.recent_rounds_raw))
+    if b.agent_turn_timeout is not None:
+        CFG["arena"]["agent_turn_timeout"] = max(30, int(b.agent_turn_timeout))
+    if b.allow_batch_approve is not None:
+        CFG["arena"]["allow_batch_approve"] = bool(b.allow_batch_approve)
+    save_config(CFG)
+    return get_settings()
+
+
+class AccountsUpdate(BaseModel):
+    accounts: list[str] | None = None       # 全量替换该平台的账号列表
+    autofill: bool | None = None
+
+
+@app.get("/api/platforms/{pid}/accounts", dependencies=C)
+def get_accounts(pid: str):
+    if pid not in adapters.available():
+        raise HTTPException(400, "unknown platform")
+    return {"platform": pid, "accounts": platform_accounts(CFG, pid),
+            "autofill": bool(CFG["platforms"].get(pid, {}).get("autofill"))}
+
+
+@app.post("/api/platforms/{pid}/accounts", dependencies=C)
+def update_accounts(pid: str, b: AccountsUpdate):
+    """账户页登记：维护平台的多账号池与 autofill 开关，立即生效并持久化。"""
+    if pid not in adapters.available():
+        raise HTTPException(400, "unknown platform")
+    if b.accounts is not None:
+        names = [x.strip() for x in b.accounts if x and x.strip()]
+        if not names:
+            raise HTTPException(400, "至少保留一个账号")
+        if len(names) != len(set(names)):
+            raise HTTPException(400, "账号名不能重复")
+        CFG["platforms"].setdefault(pid, {})["accounts"] = names
+    if b.autofill is not None:
+        CFG["platforms"].setdefault(pid, {})["autofill"] = bool(b.autofill)
+    save_config(CFG)
+    return get_accounts(pid)
 
 
 # ---------------------------------------------------------------- Agent 接口（MCP 只调这些）

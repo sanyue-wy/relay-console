@@ -33,3 +33,10 @@ def platform_accounts(cfg, pid: str) -> list[str]:
     p = cfg.get("platforms", {}).get(pid) or {}
     accounts = p.get("accounts") or ["main"]
     return list(accounts)
+
+
+def save_config(cfg) -> None:
+    """把当前生效配置整体写回 config.yaml（首次保存会从 example 固化为正式配置）。"""
+    p = ROOT / "config.yaml"
+    yaml.safe_dump(dict(cfg), p.open("w", encoding="utf-8"),
+                   allow_unicode=True, sort_keys=False)

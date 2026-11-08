@@ -188,7 +188,8 @@ class MainPool:
 # ====================================================================== 对抗池
 ARENA_SCHEMA = """
 CREATE TABLE IF NOT EXISTS items(
-  id TEXT PRIMARY KEY, title TEXT, content_enc BLOB, audience TEXT DEFAULT '*', published_at REAL);
+  id TEXT PRIMARY KEY, title TEXT, content_enc BLOB, audience TEXT DEFAULT '*',
+  session_id TEXT, published_at REAL);
 CREATE TABLE IF NOT EXISTS agents(
   participant_id TEXT PRIMARY KEY, display_name TEXT, token_hash TEXT UNIQUE, created_at REAL, revoked INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS arenas(
@@ -218,6 +219,13 @@ class PoolError(Exception):
         self.code = code
 
 
+def _migrate_arena(conn: sqlite3.Connection) -> None:
+    """旧库补列（表名/列名均为本模块常量，不来自外部输入）。"""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(items)").fetchall()}
+    if "session_id" not in cols:
+        conn.execute("ALTER TABLE items ADD COLUMN session_id TEXT")
+
+
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -226,6 +234,8 @@ class ArenaPool:
     def __init__(self, data_dir: str | Path, fernet: Fernet, ticket_ttl: int = 300):
         self.db = _DB(Path(data_dir) / "arena.db", fernet, ARENA_SCHEMA)
         self.ticket_ttl = ticket_ttl
+        with self.db.write() as conn:
+            _migrate_arena(conn)
 
     # ---------------- 审计
     def audit(self, actor: str, action: str, detail: Any = "") -> None:
@@ -265,12 +275,27 @@ class ArenaPool:
         return [dict(r) for r in rows]
 
     # ---------------- 发布条目（只能由控制台调用）
-    def publish_item(self, title: str, content: str, audience: str = "*") -> str:
+    def publish_item(self, title: str, content: str, audience: str = "*",
+                     session_id: str | None = None) -> str:
+        """发布对抗池条目。带 session_id 时与该会话保持一一对应：已有条目则原位更新。"""
+        if session_id:
+            with self.db.read() as conn:
+                r = conn.execute("SELECT id FROM items WHERE session_id=?", (session_id,)).fetchone()
+            if r:
+                iid = r["id"]
+                with self.db.write() as conn:
+                    conn.execute("UPDATE items SET title=?, content_enc=?, audience=?, published_at=? "
+                                 "WHERE id=?", (title, self.db.enc(content), audience, _now(), iid))
+                self.audit("user", "update_item", {"id": iid, "title": title, "audience": audience,
+                                                   "session_id": session_id})
+                return iid
         iid = _id("ap")
         with self.db.write() as conn:
-            conn.execute("INSERT INTO items(id,title,content_enc,audience,published_at) VALUES(?,?,?,?,?)",
-                         (iid, title, self.db.enc(content), audience, _now()))
-        self.audit("user", "publish_item", {"id": iid, "title": title, "audience": audience})
+            conn.execute("INSERT INTO items(id,title,content_enc,audience,session_id,published_at) "
+                         "VALUES(?,?,?,?,?,?)",
+                         (iid, title, self.db.enc(content), audience, session_id, _now()))
+        self.audit("user", "publish_item", {"id": iid, "title": title, "audience": audience,
+                                            "session_id": session_id})
         return iid
 
     def delete_item(self, iid: str) -> None:
@@ -283,7 +308,8 @@ class ArenaPool:
 
     def list_items(self, pid: str | None = None) -> list[dict]:
         with self.db.read() as conn:
-            rows = conn.execute("SELECT id,title,audience,published_at FROM items ORDER BY published_at DESC").fetchall()
+            rows = conn.execute("SELECT id,title,audience,session_id,published_at FROM items "
+                                "ORDER BY published_at DESC").fetchall()
         return [dict(r) for r in rows if pid is None or self._visible(r["audience"], pid)]
 
     # ---------------- 对局

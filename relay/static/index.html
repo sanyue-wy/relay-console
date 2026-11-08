@@ -2,229 +2,439 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Relay Console</title>
 <style>
-  /* Notion-style tokens（stylekit.top/zh/styles/notion-style） */
+  /* Modern Gradient tokens（stylekit.top/zh/styles/modern-gradient） */
   :root{
-    --text:#37352f; --text-gray:#9b9a97; --bg:#ffffff; --bg-gray:#f7f6f3;
-    --hover:#efedea; --active:#e3e1db; --border:rgba(55,53,47,.09);
-    --blue:#2eaadc; --blue-deep:#2383e2; --red:#eb5757; --green:#0f7b6c; --yellow:#dfab01;
-    --blue-50:#e9f5f9; --red-50:#fdebec; --green-50:#e7f4f0; --yellow-50:#fbf3db;
+    --violet:#8b5cf6; --violet-d:#7c3aed; --fuchsia:#c026d3; --cyan:#06b6d4;
+    --pink:#ec4899; --amber:#f59e0b; --ink:#020617;
+    --glass:rgba(255,255,255,.07); --glass-hi:rgba(255,255,255,.13);
+    --line:rgba(255,255,255,.14); --line-hi:rgba(255,255,255,.22);
+    --dim:rgba(255,255,255,.62); --dim2:rgba(255,255,255,.45);
   }
   *{box-sizing:border-box}
-  body{margin:0;font:14px/1.5 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",Helvetica,Arial,sans-serif;
-    display:grid;grid-template-columns:264px 1fr 360px;height:100vh;color:var(--text);background:var(--bg)}
-  aside{background:var(--bg-gray);overflow:auto;padding:12px 10px 20px;border-right:1px solid var(--border)}
-  main{display:flex;flex-direction:column;overflow:hidden}
-  section{overflow:auto;padding:14px 16px 24px;border-left:1px solid var(--border)}
-  ::-webkit-scrollbar{width:8px;height:8px}
-  ::-webkit-scrollbar-thumb{background:#d3d1cb;border-radius:4px}
-  ::-webkit-scrollbar-thumb:hover{background:#c2c0ba}
-  ::-webkit-scrollbar-track{background:transparent}
-  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+  body{margin:0;font:14px/1.6 ui-sans-serif,-apple-system,"Segoe UI","Microsoft YaHei",Helvetica,Arial,sans-serif;
+    background:var(--ink);color:#fff;min-height:100vh;overflow-x:hidden}
+  .orb{position:fixed;border-radius:50%;pointer-events:none;z-index:0}
+  .orb-a{width:560px;height:560px;top:-180px;left:-140px;
+    background:radial-gradient(circle,rgba(139,92,246,.4) 0%,rgba(139,92,246,.12) 45%,transparent 70%);
+    animation:float 14s ease-in-out infinite}
+  .orb-b{width:500px;height:500px;bottom:-170px;right:-130px;
+    background:radial-gradient(circle,rgba(6,182,212,.32) 0%,rgba(6,182,212,.1) 45%,transparent 70%);
+    animation:float 18s ease-in-out infinite reverse}
+  @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(26px)}}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
-  h3.sec{display:flex;align-items:center;gap:6px;margin:16px 4px 6px;font-size:12px;font-weight:600;color:var(--text-gray)}
-  aside h3.sec:first-child{margin-top:2px}
+  #nav{position:sticky;top:0;z-index:20;display:flex;gap:6px;align-items:center;padding:10px 22px;
+    background:rgba(2,6,23,.82);border-bottom:1px solid var(--line)}
+  .logo{font-weight:700;font-size:17px;letter-spacing:.3px;margin-right:18px;
+    background:linear-gradient(90deg,#a78bfa,#e879f9,#f472b6);-webkit-background-clip:text;background-clip:text;color:transparent}
+  #nav .tab{background:transparent;border:1px solid transparent;color:var(--dim);padding:6px 15px;border-radius:13px;
+    font-weight:500;cursor:pointer;transition:all .3s}
+  #nav .tab:hover{color:#fff;background:rgba(255,255,255,.08)}
+  #nav .tab.on{color:#fff;background:linear-gradient(90deg,rgba(139,92,246,.32),rgba(217,70,239,.32));
+    border-color:rgba(167,139,250,.5);box-shadow:0 0 18px rgba(139,92,246,.22)}
+  #nav .spacer{flex:1}
+  #nav .conn{font-size:11px;color:var(--dim2)}
 
-  button{cursor:pointer;font:inherit;font-size:13px;font-weight:500;color:var(--text);background:transparent;
-    border:none;border-radius:6px;padding:4px 10px;margin:1px 0;transition:background-color .15s,color .15s}
-  button:hover{background:var(--hover)}
-  button:active{background:var(--active)}
-  button.primary{background:var(--blue-deep);color:#fff}
-  button.primary:hover{background:#1b74d1}
-  button.primary:active{background:#1668bd}
-  button.danger:hover{background:var(--red-50);color:var(--red)}
-  button.small{padding:2px 8px;font-size:12px;color:var(--text-gray)}
-  button.small:hover{color:var(--text)}
+  .page{display:none;position:relative;z-index:1;max-width:1300px;margin:0 auto;padding:18px 22px 48px}
+  .page.on{display:block;animation:fadein .5s ease-out}
+  @keyframes fadein{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 
-  input,select,textarea{width:100%;font:inherit;color:var(--text);background:transparent;
-    border:none;border-bottom:1.5px solid transparent;border-radius:0;
-    padding:6px 2px;margin:2px 0;outline:none;transition:border-color .15s,background-color .15s}
-  input:hover,select:hover,textarea:hover{background:var(--hover)}
-  input:focus,select:focus,textarea:focus{border-bottom-color:var(--blue-deep);background:transparent}
-  select{border-bottom-color:var(--border);cursor:pointer}
-  ::placeholder{color:var(--text-gray)}
+  .card{background:rgba(15,23,42,.55);border:1px solid var(--line);
+    border-radius:20px;padding:16px;margin:0 0 14px}
+  .card h3{margin:0 0 10px;font-size:13px;font-weight:600;color:var(--dim);display:flex;gap:7px;align-items:center}
+  .grad{background:linear-gradient(90deg,#a78bfa,#e879f9,#f472b6);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hint{font-size:12px;color:var(--dim2);margin:4px 0}
 
-  .item{padding:6px 8px;border-radius:6px;cursor:pointer;margin:1px 0;transition:background-color .15s}
-  .item:hover{background:var(--hover)}
-  .item.on{background:var(--active)}
+  .btn{cursor:pointer;font:inherit;font-size:13px;font-weight:600;color:#fff;
+    background:linear-gradient(90deg,#7c3aed,#c026d3);background-size:200% auto;border:none;border-radius:14px;
+    padding:8px 16px;transition:all .3s}
+  .btn:hover{background-position:right center;box-shadow:0 6px 26px rgba(139,92,246,.38);transform:scale(1.02)}
+  .btn:active{transform:scale(.96)}
+  .ghost{cursor:pointer;font:inherit;font-size:13px;font-weight:500;color:#fff;background:rgba(255,255,255,.08);
+    border:1px solid var(--line);border-radius:14px;padding:8px 16px;transition:all .3s}
+  .ghost:hover{background:var(--glass-hi);border-color:var(--line-hi)}
+  .ghost:active{transform:scale(.96)}
+  .small{padding:3px 11px;font-size:12px;border-radius:10px}
+  .danger:hover{background:rgba(236,72,153,.2);border-color:rgba(236,72,153,.5);box-shadow:0 0 16px rgba(236,72,153,.25)}
+
+  input,select,textarea{width:100%;font:inherit;color:#fff;background:rgba(255,255,255,.08);
+    border:1px solid var(--line);border-radius:12px;padding:8px 12px;outline:none;transition:all .3s}
+  ::placeholder{color:var(--dim2)}
+  input:focus,select:focus,textarea:focus{border-color:rgba(139,92,246,.6);box-shadow:0 0 0 3px rgba(139,92,246,.16)}
+  select{cursor:pointer}
+  select option{color:#0f172a;background:#fff}
+  input[type=checkbox]{width:auto;accent-color:var(--violet);transform:scale(1.15);cursor:pointer}
+  label.ck{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--dim);cursor:pointer;margin:6px 0}
+
+  .item{padding:7px 10px;border-radius:12px;cursor:pointer;margin:2px 0;transition:background-color .3s}
+  .item:hover{background:rgba(255,255,255,.08)}
+  .item.on{background:linear-gradient(90deg,rgba(139,92,246,.28),rgba(217,70,239,.22));
+    border:1px solid rgba(167,139,250,.4)}
   .item .t{font-weight:500}
-  .sub{font-size:12px;color:var(--text-gray);margin-top:1px}
-  .row{display:flex;gap:4px;align-items:center}
+  .sub{font-size:12px;color:var(--dim2);margin-top:1px}
+  .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
   .spread{justify-content:space-between}
+  .empty{font-size:12px;color:var(--dim2);padding:2px 0}
 
-  #head{padding:14px 22px 8px;font-weight:600}
-  #head .sub{font-weight:400;margin-top:1px}
-  #chat{flex:1;overflow:auto;padding:4px 22px 14px}
-  .msg{margin:10px 0;padding:10px 12px;border-radius:8px;white-space:pre-wrap;max-width:72ch}
-  .msg.user{background:var(--blue-50)}
-  .msg.assistant{background:var(--bg-gray)}
-  .msg .who{font-size:12px;color:var(--text-gray);font-weight:500;margin-bottom:4px}
-  .relay{background:var(--yellow-50);color:#8a6d00;font-size:12px;padding:8px 12px;border-radius:8px;margin:10px 0;max-width:72ch}
-  .empty{font-size:12px;color:var(--text-gray);padding:2px 0}
+  .msg{border-radius:16px;padding:10px 14px;white-space:pre-wrap;max-width:72ch;margin:10px 0}
+  .msg.user{background:linear-gradient(90deg,rgba(124,58,237,.5),rgba(192,38,211,.4));
+    border:1px solid rgba(167,139,250,.35)}
+  .msg.assistant{background:var(--glass);border:1px solid var(--line)}
+  .msg .who{font-size:11px;color:var(--dim);font-weight:600;margin-bottom:3px}
+  .relay{background:rgba(245,158,11,.13);border:1px solid rgba(245,158,11,.35);color:#fcd34d;
+    font-size:12px;padding:8px 13px;border-radius:14px;margin:10px 0;max-width:72ch}
 
-  #composer{padding:10px 22px 16px;border-top:1px solid var(--border)}
-  #composer textarea{background:var(--bg-gray);border:none;border-radius:8px;padding:10px 12px;resize:vertical;min-height:64px}
-  #composer textarea:hover{background:var(--hover)}
-  #composer textarea:focus{background:var(--bg);border-bottom:none;box-shadow:0 0 0 2px rgba(35,131,226,.25)}
-  .actions{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
+  .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 10px;border-radius:999px;white-space:nowrap}
+  .pill.cyan{background:rgba(6,182,212,.15);color:#67e8f9;border:1px solid rgba(6,182,212,.35)}
+  .pill.pink{background:rgba(236,72,153,.15);color:#f9a8d4;border:1px solid rgba(236,72,153,.35)}
+  .pill.amber{background:rgba(245,158,11,.15);color:#fcd34d;border:1px solid rgba(245,158,11,.35)}
+  .pill.violet{background:rgba(139,92,246,.16);color:#c4b5fd;border:1px solid rgba(139,92,246,.4)}
+  .pill.gray{background:rgba(255,255,255,.08);color:var(--dim);border:1px solid var(--line)}
 
-  .card{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:8px 0;transition:box-shadow .15s}
-  .card:hover{box-shadow:0 1px 3px rgba(15,15,15,.06),0 3px 8px rgba(15,15,15,.04)}
-  .card.pending{background:var(--yellow-50);border-color:transparent}
-  .card.pending button{color:var(--text)}
-  .tag{font-size:11px;color:var(--text-gray)}
-  .pill{display:inline-block;font-size:11px;font-weight:500;padding:1px 8px;border-radius:4px;white-space:nowrap}
-  .pill.gray{background:var(--bg-gray);color:var(--text-gray)}
-  .pill.green{background:var(--green-50);color:var(--green)}
-  .pill.yellow{background:var(--yellow-50);color:#8a6d00}
-  .pill.blue{background:var(--blue-50);color:#1d7d9c}
-  .pill.red{background:var(--red-50);color:var(--red)}
-  pre#audit{white-space:pre-wrap;font:12px/1.5 SFMono-Regular,Menlo,Consolas,monospace;color:var(--text-gray);
-    background:var(--bg-gray);border-radius:8px;padding:10px;margin:8px 0 0}
+  #head{margin-bottom:6px}
+  #head .t{font-size:16px;font-weight:700}
+  #chat{flex:1;overflow:auto;padding:2px 4px 12px;min-height:0}
+  #composer textarea{margin:6px 0;min-height:64px;resize:vertical}
+
+  pre#audit{white-space:pre-wrap;font:12px/1.6 SFMono-Regular,Menlo,Consolas,monospace;color:var(--dim);
+    background:rgba(2,6,23,.55);border:1px solid var(--line);border-radius:14px;padding:12px;margin:8px 0 0}
+
+  .g2{display:grid;gap:14px}
+  @media(min-width:980px){
+    .start-grid{grid-template-columns:300px 1fr;align-items:start}
+    .pool-grid{grid-template-columns:1fr 1fr;align-items:start}
+    .acc-grid{grid-template-columns:1fr 1fr;align-items:start}
+    .set-grid{grid-template-columns:1fr 1fr;align-items:start}
+  }
+  .chatwrap{display:flex;flex-direction:column;height:calc(100vh - 128px);min-height:420px;margin-bottom:0}
+  .acc-actions{margin-top:8px}
+  .setrow{display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin:7px 0}
+  .setrow label{font-size:13px;color:var(--dim)}
 </style>
 </head>
 <body>
-<aside>
-  <h3 class="sec">🌐 平台</h3><div id="platforms"></div>
-  <h3 class="sec">💬 会话</h3>
-  <input id="newTitle" placeholder="新会话标题">
-  <select id="newPlatform"></select>
-  <button class="primary" style="width:100%;margin-top:4px" onclick="newSession()">新建会话</button>
-  <div id="sessions"></div>
-  <div id="chatsBox"></div>
-</aside>
+<div class="orb orb-a"></div><div class="orb orb-b"></div>
 
-<main>
-  <div id="head"><div>Relay Console</div><div class="sub">选择或新建一个会话</div></div>
-  <div id="chat"></div>
-  <div id="composer">
-    <textarea id="q" rows="3" placeholder="输入问题，Ctrl + Enter 发送"></textarea>
-    <div class="actions">
-      <button class="primary" onclick="ask()">发送</button>
-      <button class="small" onclick="publish('summary')">摘要发布到对抗池</button>
-      <button class="small" onclick="publish('messages')">最近 6 条发布到对抗池</button>
-      <button class="small" onclick="publishText()">编辑后发布</button>
+<nav id="nav">
+  <span class="logo">Relay Console</span>
+  <button class="tab on" data-page="start" onclick="show('start')">开始</button>
+  <button class="tab" data-page="pool" onclick="show('pool')">Agent 池</button>
+  <button class="tab" data-page="accounts" onclick="show('accounts')">账户</button>
+  <button class="tab" data-page="settings" onclick="show('settings')">设置</button>
+  <span class="spacer"></span>
+  <span class="conn" id="connInfo"></span>
+</nav>
+
+<div class="page on" id="page-start">
+  <div class="g2 start-grid">
+    <div>
+      <div class="card">
+        <h3>💬 新建会话</h3>
+        <input id="newTitle" placeholder="会话标题">
+        <select id="newPlatform" style="margin-top:6px"></select>
+        <button class="btn" style="width:100%;margin-top:8px" onclick="newSession()">新建</button>
+      </div>
+      <div class="card">
+        <h3>🗂 会话</h3><div id="sessions"></div>
+      </div>
+    </div>
+    <div class="card chatwrap">
+      <div id="head"><div class="t">选择一个会话</div><div class="sub">开始页只负责会话与问答</div></div>
+      <div id="chat"></div>
+      <div id="composer">
+        <textarea id="q" rows="3" placeholder="输入问题，Ctrl + Enter 发送"></textarea>
+        <div class="row"><button class="btn" onclick="ask()">发送</button><span class="hint">接力与发布在 Agent 池页查看</span></div>
+      </div>
     </div>
   </div>
-</main>
+</div>
 
-<section>
-  <h3 class="sec">🛡️ 授权请求</h3><div id="approvals"><span class="empty">暂无</span></div>
-  <h3 class="sec">📥 对抗池条目</h3><div id="items"></div>
-  <h3 class="sec">🤖 Agent</h3>
-  <input id="agentName" placeholder="Agent 名称">
-  <button class="primary" style="width:100%;margin-top:4px" onclick="newAgent()">新建 Agent 令牌</button>
-  <div id="agents"></div>
-  <h3 class="sec">⚔️ 对抗</h3>
-  <select id="mode"><option value="web_vs_web">网页 vs 网页</option><option value="web_vs_agent">网页 vs Agent</option><option value="agent_vs_agent">Agent vs Agent</option></select>
-  <input id="topic" placeholder="议题">
-  <input id="seatA" placeholder="A 方：deepseek 或 agent:名称">
-  <input id="seatB" placeholder="B 方：kimi 或 agent:名称">
-  <button class="primary" style="width:100%;margin-top:4px" onclick="newArena()">创建对局</button>
-  <div id="arenas"></div>
-  <h3 class="sec">📜 审计</h3><button class="small" onclick="showAudit()">查看最近记录</button><pre id="audit"></pre>
-</section>
+<div class="page" id="page-pool">
+  <div class="g2 pool-grid">
+    <div>
+      <div class="card">
+        <h3>🛡️ 授权请求 <span class="pill amber" id="apCount">0</span></h3>
+        <div id="approvals"><span class="empty">暂无</span></div>
+      </div>
+      <div class="card">
+        <h3>📤 发布到读取池</h3>
+        <div class="hint">会话池与读取池一一对应：同一会话重复发布只会更新同一条目</div>
+        <select id="pubSession" style="margin-top:6px"></select>
+        <div class="row" style="margin-top:6px">
+          <select id="pubMode" style="flex:1">
+            <option value="summary">最新摘要</option>
+            <option value="messages">最近消息</option>
+            <option value="text">自定义文本</option>
+          </select>
+          <input id="pubLastN" type="number" value="6" min="1" max="50" style="width:76px" title="最近消息条数">
+        </div>
+        <input id="pubTitle" placeholder="条目标题（默认取会话标题）" style="margin-top:6px">
+        <textarea id="pubText" rows="3" placeholder="自定义文本（选“自定义文本”时使用，可脱敏）" style="margin-top:6px"></textarea>
+        <div class="row" style="margin-top:8px">
+          <input id="pubAudience" placeholder="可见范围 * 或 agent:名,agent:名" style="flex:1">
+          <button class="btn" onclick="publish()">发布 / 更新</button>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h3>📥 读取池条目</h3><div id="items"></div>
+      </div>
+      <div class="card">
+        <h3>🤖 Agent</h3>
+        <div class="row"><input id="agentName" placeholder="Agent 名称" style="flex:1">
+          <button class="btn small" onclick="newAgent()">新建令牌</button></div>
+        <div id="agents" style="margin-top:6px"></div>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>⚔️ 对抗对局</h3>
+    <div class="row">
+      <select id="mode" style="width:auto;flex:1">
+        <option value="web_vs_web">网页 vs 网页</option>
+        <option value="web_vs_agent">网页 vs Agent</option>
+        <option value="agent_vs_agent">Agent vs Agent</option>
+      </select>
+      <input id="topic" placeholder="议题" style="flex:2">
+    </div>
+    <div class="row" style="margin-top:6px">
+      <input id="seatA" placeholder="A 方：deepseek 或 agent:名称" style="flex:1">
+      <input id="seatB" placeholder="B 方：kimi 或 agent:名称" style="flex:1">
+      <button class="btn" onclick="newArena()">创建对局</button>
+    </div>
+    <div id="arenas" style="margin-top:8px"></div>
+  </div>
+  <div class="card">
+    <h3>📜 审计</h3><button class="ghost small" onclick="showAudit()">查看最近记录</button>
+    <pre id="audit"></pre>
+  </div>
+</div>
+
+<div class="page" id="page-accounts">
+  <div class="g2 acc-grid" id="accList"></div>
+</div>
+
+<div class="page" id="page-settings">
+  <div class="g2 set-grid">
+    <div>
+      <div class="card">
+        <h3>🔀 接力</h3>
+        <div class="setrow"><label>接力顺序</label><input id="setOrder" placeholder="deepseek, kimi, doubao, gemini, hark"></div>
+        <div class="setrow"><label>冷却分钟</label><input id="setCooldown" type="number" min="1"></div>
+        <div class="setrow"><label>预生成阈值</label><input id="setNear" type="number" min="0" title="未摘要字符量超过该值提前生成摘要，0 关闭"></div>
+        <label class="ck"><input type="checkbox" id="setTrunc"> 回复被截断时也触发接力</label>
+      </div>
+      <div class="card">
+        <h3>🧠 摘要</h3>
+        <div class="setrow"><label>每 N 轮更新</label><input id="setTurns" type="number" min="1"></div>
+        <div class="setrow"><label>交接附带轮数</label><input id="setRecent" type="number" min="0"></div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h3>⚔️ 对抗</h3>
+        <div class="setrow"><label>Agent 限时(秒)</label><input id="setArenaTimeout" type="number" min="30"></div>
+        <label class="ck"><input type="checkbox" id="setBatch"> 启用“本轮全部批准”按钮</label>
+      </div>
+      <div class="card">
+        <h3>ℹ️ 运行信息</h3>
+        <div class="sub" id="setInfo"></div>
+        <button class="btn" style="margin-top:10px" onclick="saveSettings()">保存设置</button>
+        <div class="hint">保存立即生效并写回 config.yaml（注释不保留）；凭据与密钥只存系统凭据库，不在此页</div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
 let cur=null, platforms=[];
+const $=id=>document.getElementById(id);
 const api=(p,o={})=>fetch(p,{headers:{'Content-Type':'application/json'},...o}).then(async r=>{const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.detail||j.error||r.status);return j});
 const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
-async function loadPlatforms(){
+/* ---------------- 页面切换 ---------------- */
+const PAGES=['start','pool','accounts','settings'];
+async function show(p){
+  PAGES.forEach(x=>$('page-'+x).classList.toggle('on',x===p));
+  document.querySelectorAll('#nav .tab').forEach(b=>b.classList.toggle('on',b.dataset.page===p));
+  try{
+    if(p==='start'){await Promise.all([loadPlatformsLite(),loadSessionsData()]);renderSessions();if(cur)await openS(cur,true);}
+    if(p==='pool'){await loadPoolPage();}
+    if(p==='accounts'){await loadAccounts();}
+    if(p==='settings'){await loadSettings();}
+  }catch(e){alert(e.message)}
+}
+
+/* ---------------- 开始页：会话 ---------------- */
+async function loadPlatformsLite(){
   const d=await api('/api/platforms'); platforms=d.platforms.map(p=>p.id);
-  document.getElementById('platforms').innerHTML=d.platforms.map(p=>`
-    <div class="item">
-      <div class="row spread"><span class="t">${p.id}</span>
-        <span>${p.accounts.map(a=>`<span class="pill ${a.cooldown_until?'yellow':'green'}">${esc(a.account)}${a.cooldown_until?' · 冷却':''}</span>`).join(' ')}</span>
-      </div>
-      <div class="row" style="margin-top:3px">
-        <button class="small" onclick="openP('${p.id}')">打开 / 登录</button>
-        <button class="small" onclick="showChats('${p.id}')">历史会话</button>
-      </div>
-    </div>`).join('');
-  document.getElementById('newPlatform').innerHTML=platforms.map(p=>`<option>${p}</option>`).join('');
+  $('newPlatform').innerHTML=platforms.map(p=>`<option>${p}</option>`).join('');
 }
-async function openP(id){try{await api(`/api/platforms/${id}/open`,{method:'POST',body:JSON.stringify({autofill:true})})}catch(e){alert(e.message)}}
-async function showChats(id){
-  const d=await api(`/api/platforms/${id}/chats`).catch(e=>{alert(e.message);return{chats:[]}});
-  chatsBox.innerHTML=`<h3 class="sec">🕘 ${id} 历史会话</h3>`+(d.chats.map(c=>`<div class="item" onclick="resumeChat('${id}','${encodeURIComponent(c.url||'')}','${esc(c.title).replace(/'/g,'')}')"><span class="t">${esc(c.title)}</span></div>`).join('')||'<span class="empty">未读到（probe 修正 chat_list_item）</span>');
-}
-async function resumeChat(pid,url,title){
-  const r=await api('/api/sessions/resume',{method:'POST',body:JSON.stringify({platform:pid,url:decodeURIComponent(url),title})});
-  cur=r.id; await loadSessions(); openS(cur);
-}
-async function loadSessions(){
-  const s=await api('/api/sessions');
-  document.getElementById('sessions').innerHTML=s.map(x=>`<div class="item ${x.id===cur?'on':''}" onclick="openS('${x.id}')"><span class="t">${esc(x.title)}</span><div class="sub">${x.chain.join(' → ')}</div></div>`).join('')||'<span class="empty">还没有会话</span>';
+async function loadSessionsData(){cache.sessions=await api('/api/sessions');return cache.sessions}
+function renderSessions(){
+  $('sessions').innerHTML=cache.sessions.map(x=>`<div class="item ${x.id===cur?'on':''}" onclick="openS('${x.id}')"><span class="t">${esc(x.title)}</span><div class="sub">${x.chain.join(' → ')}</div></div>`).join('')||'<span class="empty">还没有会话</span>';
 }
 async function newSession(){
-  const r=await api('/api/sessions',{method:'POST',body:JSON.stringify({title:newTitle.value||'新会话',platform:newPlatform.value})});
-  cur=r.id; await loadSessions(); openS(cur);
+  const r=await api('/api/sessions',{method:'POST',body:JSON.stringify({title:$('newTitle').value||'新会话',platform:$('newPlatform').value})});
+  cur=r.id; await loadSessionsData(); renderSessions(); openS(cur);
 }
-async function openS(id){
+async function openS(id,silent){
   cur=id; const s=await api('/api/sessions/'+id);
-  head.innerHTML=`<div>${esc(s.title)}</div><div class="sub">当前 ${s.platform}:${s.account||'main'} · 接力链 ${s.chain.join(' → ')}</div>`;
-  chat.innerHTML=s.messages.map(m=>`<div class="msg ${m.role}"><div class="who">${m.role==='user'?'你':m.platform}</div>${esc(m.content)}</div>`).join('');
-  chat.scrollTop=chat.scrollHeight; loadSessions();
+  $('head').innerHTML=`<div class="t">${esc(s.title)}</div><div class="sub">当前 ${s.platform}:${s.account||'main'} · 接力链 ${s.chain.join(' → ')}${s.pool_item_id?' · 已发布读取池':''}</div>`;
+  $('chat').innerHTML=s.messages.map(m=>`<div class="msg ${m.role}"><div class="who">${m.role==='user'?'你':m.platform}</div>${esc(m.content)}</div>`).join('');
+  $('chat').scrollTop=$('chat').scrollHeight; renderSessions();
 }
 async function ask(){
-  if(!cur)return alert('先选会话'); const t=q.value.trim(); if(!t)return; q.value='';
-  chat.innerHTML+=`<div class="msg user">${esc(t)}</div><div class="empty" id="wait">等待回复…</div>`;
-  chat.scrollTop=chat.scrollHeight;
+  if(!cur)return alert('先选会话'); const t=$('q').value.trim(); if(!t)return; $('q').value='';
+  $('chat').innerHTML+=`<div class="msg user">${esc(t)}</div><div class="empty" id="wait">等待回复…</div>`;
+  $('chat').scrollTop=$('chat').scrollHeight;
   try{const r=await api(`/api/sessions/${cur}/ask`,{method:'POST',body:JSON.stringify({text:t})});
-    r.relays.forEach(x=>chat.innerHTML+=`<div class="relay">已接力：${x.from} → ${x.to}（${esc(x.reason)}）</div>`);
-  }catch(e){alert(e.message)} openS(cur); loadPlatforms();
+    r.relays.forEach(x=>$('chat').innerHTML+=`<div class="relay">已接力：${x.from} → ${x.to}（${esc(x.reason)}）</div>`);
+  }catch(e){alert(e.message)} openS(cur);
 }
-q.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.ctrlKey)ask()});
-async function publish(mode){
-  if(!cur)return; const title=prompt('给 Agent 看的标题'); if(!title)return;
-  await api('/api/pool/publish',{method:'POST',body:JSON.stringify({title,session_id:cur,mode})}); loadItems();
+$('q').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.ctrlKey)ask()});
+
+/* ---------------- Agent 池页 ---------------- */
+async function loadPoolPage(){
+  await loadSessionsData();
+  $('pubSession').innerHTML='<option value="">（不关联会话）</option>'+cache.sessions.map(x=>`<option value="${x.id}">${esc(x.title)}</option>`).join('');
+  await Promise.all([loadApprovals(),loadItems(),loadAgents(),loadArenas()]);
 }
-async function publishText(){
-  const title=prompt('标题'); if(!title)return; const text=prompt('内容（可脱敏后粘贴）'); if(!text)return;
-  await api('/api/pool/publish',{method:'POST',body:JSON.stringify({title,mode:'text',text})}); loadItems();
-}
-async function loadItems(){
-  const it=await api('/api/pool/items');
-  items.innerHTML=it.map(i=>`<div class="card"><div class="row spread"><span class="t">${esc(i.title)}</span><button class="small danger" onclick="delItem('${i.id}')">删除</button></div><div class="sub">${i.id} · ${esc(i.audience)}</div></div>`).join('')||'<span class="empty">空</span>';
-}
-async function delItem(id){await api('/api/pool/items/'+id,{method:'DELETE'});loadItems()}
 async function loadApprovals(){
   const d=await api('/api/approvals');
+  $('apCount').textContent=d.pending.length;
   const what=r=>r.scope_type==='items'?'条目：'+esc((r.titles||[]).join('、'))
     :r.scope_type==='turn'?'对局 '+r.scope.arena_id+' 的本轮题目'
     :'会话 '+r.scope.session_id+' 的状态/摘要预览';
-  approvals.innerHTML=d.pending.map(r=>`<div class="card pending"><div class="t">${esc(r.participant_id)} 申请读取</div><div>${what(r)}</div><div class="sub">理由：${esc(r.reason)}</div><div class="row" style="margin-top:6px"><button class="primary small" onclick="decide('${r.id}','approve')">批准一次</button>${d.allow_batch&&r.scope_type==='turn'?`<button class="small" onclick="approveRound('${r.scope.arena_id}')">本轮全部批准</button>`:''}<button class="small danger" onclick="decide('${r.id}','deny')">拒绝</button></div></div>`).join('')||'<span class="empty">暂无</span>';
+  $('approvals').innerHTML=d.pending.map(r=>`<div class="item" style="border:1px solid rgba(245,158,11,.35);background:rgba(245,158,11,.08)"><div class="t">${esc(r.participant_id)} 申请读取</div><div class="sub">${what(r)} · 理由：${esc(r.reason)}</div><div class="row" style="margin-top:6px"><button class="btn small" onclick="decide('${r.id}','approve')">批准一次</button>${d.allow_batch&&r.scope_type==='turn'?`<button class="ghost small" onclick="approveRound('${r.scope.arena_id}')">本轮全部批准</button>`:''}<button class="ghost small danger" onclick="decide('${r.id}','deny')">拒绝</button></div></div>`).join('')||'<span class="empty">暂无</span>';
 }
-async function approveRound(aid){try{await api(`/api/arenas/${aid}/approve-round`,{method:'POST'})}catch(e){alert(e.message)}loadApprovals()}
 async function decide(id,d){await api(`/api/approvals/${id}/${d}`,{method:'POST'});loadApprovals()}
+async function approveRound(aid){try{await api(`/api/arenas/${aid}/approve-round`,{method:'POST'})}catch(e){alert(e.message)}loadApprovals()}
+async function loadItems(){
+  const [its,ses]=await Promise.all([api('/api/pool/items'),api('/api/sessions')]);
+  const st={}; ses.forEach(x=>st[x.id]=x.title);
+  $('items').innerHTML=its.map(i=>`<div class="item" style="cursor:default"><div class="row spread"><span class="t">${esc(i.title)}</span><button class="ghost small danger" onclick="delItem('${i.id}')">删除</button></div><div class="sub">${i.id}${i.session_id?' · 源会话：'+esc(st[i.session_id]||i.session_id):' · 独立条目'} · ${esc(i.audience)}</div></div>`).join('')||'<span class="empty">空</span>';
+}
+async function delItem(id){await api('/api/pool/items/'+id,{method:'DELETE'});loadItems()}
+async function publish(){
+  const sid=$('pubSession').value, mode=$('pubMode').value;
+  const title=$('pubTitle').value||(cache.sessions.find(x=>x.id===sid)||{}).title||'发布条目';
+  const body={title,session_id:sid||null,mode,text:$('pubText').value||null,audience:$('pubAudience').value||'*'};
+  try{const r=await api('/api/pool/publish',{method:'POST',body:JSON.stringify(body)});
+    alert(r.linked?'已更新该会话对应的读取池条目（1:1）':'已发布独立条目');
+    $('pubText').value=''; loadItems();
+  }catch(e){alert(e.message)}
+}
 async function loadAgents(){
   const a=await api('/api/agents');
-  agents.innerHTML=a.map(x=>`<div class="item"><div class="row spread"><span class="t">${esc(x.participant_id)}</span>${x.revoked?'<span class="pill gray">已吊销</span>':`<button class="small danger" onclick="revoke('${x.participant_id}')">吊销</button>`}</div></div>`).join('')||'<span class="empty">还没有 Agent</span>';
+  $('agents').innerHTML=a.map(x=>`<div class="item" style="cursor:default"><div class="row spread"><span class="t">${esc(x.participant_id)}</span>${x.revoked?'<span class="pill gray">已吊销</span>':`<button class="ghost small danger" onclick="revoke('${x.participant_id}')">吊销</button>`}</div></div>`).join('')||'<span class="empty">还没有 Agent</span>';
 }
 async function newAgent(){
-  const r=await api('/api/agents',{method:'POST',body:JSON.stringify({name:agentName.value})});
+  const r=await api('/api/agents',{method:'POST',body:JSON.stringify({name:$('agentName').value})});
   prompt('令牌只显示一次，复制到该 Agent 的 MCP 配置 RELAY_AGENT_TOKEN：',r.token); loadAgents();
 }
 async function revoke(pid){await api(`/api/agents/${encodeURIComponent(pid)}/revoke`,{method:'POST'});loadAgents()}
 function seat(v,side){v=v.trim();return v.startsWith('agent:')?{side,kind:'agent',participant_id:v}:{side,kind:'web',platform:v}}
 async function newArena(){
-  await api('/api/arenas',{method:'POST',body:JSON.stringify({mode:mode.value,topic:topic.value,seats:[seat(seatA.value,'正方'),seat(seatB.value,'反方')]})}); loadArenas();
+  await api('/api/arenas',{method:'POST',body:JSON.stringify({mode:$('mode').value,topic:$('topic').value,seats:[seat($('seatA').value,'正方'),seat($('seatB').value,'反方')]})}); loadArenas();
 }
 async function loadArenas(){
   const a=await api('/api/arenas');
-  arenas.innerHTML=a.map(x=>`<div class="card"><div class="row spread"><span class="t">${esc(x.topic)}</span><span class="pill blue">${x.mode}</span></div><div class="row" style="margin-top:6px"><button class="small" onclick="round('${x.id}')">下一轮</button><button class="small" onclick="viewArena('${x.id}')">查看</button></div><div id="ar_${x.id}"></div></div>`).join('')||'<span class="empty">还没有对局</span>';
+  $('arenas').innerHTML=a.map(x=>`<div class="item" style="cursor:default"><div class="row spread"><span class="t">${esc(x.topic)}</span><span class="pill violet">${x.mode}</span></div><div class="row" style="margin-top:5px"><button class="ghost small" onclick="round('${x.id}')">下一轮</button><button class="ghost small" onclick="viewArena('${x.id}')">查看</button></div><div id="ar_${x.id}"></div></div>`).join('')||'<span class="empty">还没有对局</span>';
 }
 async function round(id){try{await api(`/api/arenas/${id}/round`,{method:'POST'})}catch(e){alert(e.message)} viewArena(id)}
 async function viewArena(id){
   const d=await api('/api/arenas/'+id);
-  document.getElementById('ar_'+id).innerHTML=`<div class="sub">状态：${esc(d.round_status)}</div>`+d.turns.map(t=>`<div class="msg assistant"><div class="who">第${t.round}轮 · ${t.side}</div>${esc(t.content)}</div>`).join('');
+  $('ar_'+id).innerHTML=`<div class="sub">状态：${esc(d.round_status)}</div>`+d.turns.map(t=>`<div class="msg assistant"><div class="who">第${t.round}轮 · ${t.side}</div>${esc(t.content)}</div>`).join('');
 }
-async function showAudit(){const a=await api('/api/audit');audit.textContent=a.map(x=>`${new Date(x.ts*1000).toLocaleString()} ${x.actor} ${x.action} ${x.detail}`).join('\n')}
+async function showAudit(){const a=await api('/api/audit');$('audit').textContent=a.map(x=>`${new Date(x.ts*1000).toLocaleString()} ${x.actor} ${x.action} ${x.detail}`).join('\n')}
 
-loadPlatforms();loadSessions();loadItems();loadAgents();loadArenas();loadApprovals();
-setInterval(loadApprovals,3000);
+/* ---------------- 账户页 ---------------- */
+async function loadAccounts(){
+  const d=await api('/api/platforms');
+  $('accList').innerHTML=d.platforms.map(p=>`
+    <div class="card">
+      <h3>🌐 ${p.id}
+        <span class="spacer" style="flex:1"></span>
+        <label class="ck" style="margin:0" title="开启后打开平台未登录时用凭据库代填（凭据用 scripts/add_credential.py 录入）">
+          <input type="checkbox" ${p.autofill?'checked':''} onchange="toggleAutofill('${p.id}',this.checked)"> autofill
+        </label>
+      </h3>
+      ${(p.accounts||[]).map(a=>`<div class="item" style="cursor:default"><div class="row spread">
+          <span><span class="pill ${a.cooldown_until?'amber':'cyan'}">${esc(a.account)}</span>${a.cooldown_until?' <span class="sub">冷却至 '+a.cooldown_until.slice(11,16)+'</span>':''}</span>
+          <span class="row">
+            <button class="ghost small" onclick="openP('${p.id}','${esc(a.account)}')">打开 / 登录</button>
+            <button class="ghost small danger" onclick="delAccount('${p.id}','${esc(a.account)}')">移除</button>
+          </span></div></div>`).join('')}
+      <div class="row" style="margin-top:8px">
+        <input id="acc_${p.id}" placeholder="新账号名" style="flex:1">
+        <button class="btn small" onclick="addAccount('${p.id}')">登记账号</button>
+        <button class="ghost small" onclick="showChats('${p.id}')">平台历史会话</button>
+      </div>
+      <div id="chats_${p.id}"></div>
+    </div>`).join('');
+}
+async function saveAccounts(pid,accounts){return api(`/api/platforms/${pid}/accounts`,{method:'POST',body:JSON.stringify({accounts})})}
+async function addAccount(pid){
+  const v=$('acc_'+pid).value.trim(); if(!v)return;
+  const cur2=(await api(`/api/platforms/${pid}/accounts`)).accounts;
+  await saveAccounts(pid,[...new Set([...cur2,v])]);
+  $('acc_'+pid).value=''; loadAccounts();
+}
+async function delAccount(pid,name){
+  const cur2=(await api(`/api/platforms/${pid}/accounts`)).accounts;
+  const next=cur2.filter(x=>x!==name);
+  if(!next.length)return alert('至少保留一个账号');
+  await saveAccounts(pid,next); loadAccounts();
+}
+async function toggleAutofill(pid,on){await api(`/api/platforms/${pid}/accounts`,{method:'POST',body:JSON.stringify({autofill:on})})}
+async function openP(pid,account){try{await api(`/api/platforms/${pid}/open`,{method:'POST',body:JSON.stringify({account,autofill:true})})}catch(e){alert(e.message)}}
+async function showChats(pid){
+  const box=$('chats_'+pid);
+  const d=await api(`/api/platforms/${pid}/chats`).catch(e=>{alert(e.message);return{chats:[]}});
+  box.innerHTML=d.chats.map(c=>`<div class="item" onclick="resumeChat('${pid}','${encodeURIComponent(c.url||'')}','${esc(c.title).replace(/'/g,'')}')"><span class="t">${esc(c.title)}</span></div>`).join('')||'<span class="empty">未读到（probe 修正 chat_list_item）</span>';
+}
+async function resumeChat(pid,url,title){
+  const r=await api('/api/sessions/resume',{method:'POST',body:JSON.stringify({platform:pid,url:decodeURIComponent(url),title})});
+  cur=r.id; await loadSessionsData(); show('start'); openS(cur);
+}
+
+/* ---------------- 设置页 ---------------- */
+async function loadSettings(){
+  const s=await api('/api/settings');
+  $('setOrder').value=(s.relay_order||[]).join(', ');
+  $('setCooldown').value=s.default_cooldown_minutes;
+  $('setNear').value=s.near_threshold_chars;
+  $('setTrunc').checked=!!s.relay_on_truncation;
+  $('setTurns').value=s.every_n_turns;
+  $('setRecent').value=s.recent_rounds_raw;
+  $('setArenaTimeout').value=s.agent_turn_timeout;
+  $('setBatch').checked=!!s.allow_batch_approve;
+  $('setInfo').innerHTML=`监听 <b>${esc(s.host)}:${s.port}</b> · 数据目录 <b>${esc(s.data_dir)}</b><br>提示：host/port/浏览器承载在 config.yaml 修改后重启生效`;
+}
+async function saveSettings(){
+  const body={
+    relay_order:$('setOrder').value.split(',').map(x=>x.trim()).filter(Boolean),
+    default_cooldown_minutes:+$('setCooldown').value,
+    relay_on_truncation:$('setTrunc').checked,
+    near_threshold_chars:+$('setNear').value,
+    every_n_turns:+$('setTurns').value,
+    recent_rounds_raw:+$('setRecent').value,
+    agent_turn_timeout:+$('setArenaTimeout').value,
+    allow_batch_approve:$('setBatch').checked,
+  };
+  try{await api('/api/settings',{method:'POST',body:JSON.stringify(body)});alert('已保存并写入 config.yaml')}
+  catch(e){alert(e.message)}
+}
+
+/* ---------------- 启动 ---------------- */
+show('start');
+fetch('/api/platforms').then(r=>r.json()).then(()=>{$('connInfo').textContent='已连接'}).catch(()=>{$('connInfo').textContent='控制台未连接'});
+setInterval(()=>{if($('page-pool').classList.contains('on'))loadApprovals()},3000);
 </script>
 </body>
 </html>
