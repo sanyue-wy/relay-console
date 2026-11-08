@@ -97,8 +97,29 @@
 
   #head{margin-bottom:6px}
   #head .t{font-size:16px;font-weight:700}
+  #head .row{margin-top:6px}
   #chat{flex:1;overflow:auto;padding:2px 4px 12px;min-height:0}
   #composer textarea{margin:6px 0;min-height:64px;resize:vertical}
+
+  /* 手动切换弹窗（A4） */
+  #hoModal{position:fixed;inset:0;z-index:50;display:none}
+  #hoModal.on{display:grid;place-items:center}
+  .ho-mask{position:absolute;inset:0;background:rgba(2,6,23,.74)}
+  .ho-box{position:relative;z-index:1;width:min(680px,94vw);max-height:88vh;overflow:auto;
+    background:rgba(15,23,42,.92);border:1px solid var(--line-hi);border-radius:20px;padding:16px}
+  .ho-steps{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--dim);margin:8px 0 12px}
+  .ho-steps .dot{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line);color:var(--dim2)}
+  .ho-steps .dot.on{color:#fff;border-color:rgba(167,139,250,.55);background:rgba(139,92,246,.18)}
+  .ho-steps .arr{color:var(--dim2)}
+  .ho-step{display:none}
+  .ho-step.on{display:block}
+  .relay.manual{background:rgba(255,255,255,.07);border-color:var(--line);color:var(--dim)}
+  .badge{display:inline-block;font-size:11px;padding:1px 8px;border-radius:999px;margin-left:6px;
+    border:1px solid var(--line);color:var(--dim)}
+  .badge.ok{color:#86efac;border-color:rgba(134,239,172,.4)}
+  .badge.warn{color:#fcd34d;border-color:rgba(245,158,11,.4)}
+  .badge.off{color:var(--dim2)}
 
   pre#audit{white-space:pre-wrap;font:12px/1.6 SFMono-Regular,Menlo,Consolas,monospace;color:var(--dim);
     background:rgba(2,6,23,.55);border:1px solid var(--line);border-radius:14px;padding:12px;margin:8px 0 0}
@@ -150,6 +171,63 @@
       <div id="composer">
         <textarea id="q" rows="3" placeholder="输入问题，Ctrl + Enter 发送"></textarea>
         <div class="row"><button class="btn" data-act="ask">发送</button><span class="hint">接力与发布在 Agent 池页查看</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 手动“总结并切换”三步弹窗（A4） -->
+<div id="hoModal">
+  <div class="ho-mask" data-act="hoClose"></div>
+  <div class="ho-box">
+    <div class="row spread">
+      <h3 style="margin:0">🔁 总结并切换</h3>
+      <button class="ghost small" data-act="hoClose">✕ 关闭</button>
+    </div>
+    <div class="ho-steps">
+      <span class="dot" id="hoDot1">1 生成摘要</span><span class="arr">→</span>
+      <span class="dot" id="hoDot2">2 选择目标</span><span class="arr">→</span>
+      <span class="dot" id="hoDot3">3 确认</span>
+    </div>
+
+    <div class="ho-step on" id="hoStep1">
+      <div class="sub" id="hoGen">打开弹窗时自动生成摘要…</div>
+      <textarea id="hoSummary" rows="8" style="margin:8px 0"></textarea>
+      <div class="sub" id="hoMeta"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="ghost small" data-act="hoRefresh">🔄 重新生成</button>
+        <button class="ghost small" data-act="hoSaveSummary">💾 保存修改</button>
+        <button class="btn small" data-act="hoTo2">下一步：选择目标 →</button>
+      </div>
+    </div>
+
+    <div class="ho-step" id="hoStep2">
+      <div class="setrow"><label>目标平台</label><select id="hoPlatform"></select></div>
+      <div class="setrow"><label>目标账号</label><select id="hoAccount"></select></div>
+      <div class="sub" id="hoStatus" style="margin-left:158px"></div>
+      <div class="setrow"><label>附带最近原文</label>
+        <select id="hoRounds">
+          <option value="0">不附带原文（只发摘要）</option>
+          <option value="2">最近 1 轮</option>
+          <option value="4" selected>最近 2 轮</option>
+          <option value="6">最近 3 轮</option>
+          <option value="10">最近 5 轮</option>
+        </select></div>
+      <div class="setrow" style="align-items:flex-start"><label>下一个问题（可选）</label>
+        <textarea id="hoQuestion" rows="2" placeholder="留空则只让目标平台确认收到背景，然后等待你继续提问"></textarea></div>
+      <div class="row" style="margin-top:8px">
+        <button class="ghost small" data-act="hoBack1">← 上一步</button>
+        <button class="btn small" data-act="hoTo3">下一步：确认 →</button>
+      </div>
+    </div>
+
+    <div class="ho-step" id="hoStep3">
+      <div id="hoPreview" class="sub">正在生成预览…</div>
+      <pre id="hoPkg" style="white-space:pre-wrap;max-height:180px;overflow:auto;font-size:12px;
+        background:rgba(2,6,23,.55);border:1px solid var(--line);border-radius:12px;padding:10px"></pre>
+      <div class="row" style="margin-top:8px">
+        <button class="ghost small" data-act="hoBack2">← 上一步</button>
+        <button class="btn" data-act="hoGo">🔁 切换</button>
       </div>
     </div>
   </div>
